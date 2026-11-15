@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "id": "village-alpha",
+  "title": "Established village",
+  "connection": {
+    "host": "127.0.0.1",
+    "port": 25566,
+    "minecraft_version": "1.21.6",
+    "auth": "offline"
+  },
+  "models": {
+    "day": {
+      "api": "ollama",
+      "model": "qwen3:8b",
+      "params": {
+        "think": false,
+        "keep_alive": -1,
+        "options": {
+          "num_ctx": 8192,
+          "num_predict": 512
+        }
+      }
+    },
+    "dream": {
+      "api": "ollama",
+      "model": "qwen3:14b",
+      "params": {
+        "think": false,
+        "keep_alive": -1,
+        "options": {
+          "num_ctx": 8192,
+          "num_predict": 1024
+        }
+      }
+    }
+  },
+  "inhabitants": [
+    "inhabitants/ione.json",
+    "inhabitants/cass.json",
+    "inhabitants/rufus.json",
+    "inhabitants/nell.json",
+    "inhabitants/bram.json"
+  ],
+  "village": "village.json",
+  "settings": {
+    "base_profile": "survival",
+    "allow_insecure_coding": false,
+    "load_memory": true
+  }
+}

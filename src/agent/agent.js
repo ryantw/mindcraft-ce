@@ -17,7 +17,7 @@ import settings from './settings.js';
 import { Task } from './tasks/tasks.js';
 import { speak } from './speak.js';
 import { log, validateNameFormat, handleDisconnection } from './connection_handler.js';
-import { resolveStartupGoal, usableGoal } from './startup_goal.js';
+import { resolveStartupGoal, resolveVillageAutonomy, usableGoal, VILLAGE_AUTONOMY_PREAMBLE } from './startup_goal.js';
 import { PlanManager } from './plan_manager.js';
 import { blockingRepeatCount, isCommandRejection, updateRepeatCounts } from './action_outcome.js';
 import { maybeAutoReflect, recordCommandResult } from './reflection_triggers.js';
@@ -215,10 +215,18 @@ export class Agent {
         if (startup.notice) {
             this.history.add('system', startup.notice);
         }
+        const villageStart = resolveVillageAutonomy({
+            saved: save_data?.self_prompt,
+            villageAutonomy: settings.village_autonomy === true,
+        });
         if (savedGoal) {
             const resumablePause = save_data.self_prompting_state === 2
                 && !(save_data.last_sender && convoManager.otherAgentInGame(save_data.last_sender));
             await this.self_prompter.handleLoad(savedGoal, save_data.self_prompting_state, { resumePaused: resumablePause });
+        } else if (villageStart.mode === 'autonomous') {
+            const alreadyAnnounced = String(save_data?.self_prompt ?? '').trim() === VILLAGE_AUTONOMY_PREAMBLE;
+            if (!alreadyAnnounced) this.history.add('system', VILLAGE_AUTONOMY_PREAMBLE);
+            this.self_prompter.start(VILLAGE_AUTONOMY_PREAMBLE);
         } else if (startup.goal) {
             if (startup.replacedSavedGoal || startup.notice) {
                 console.log(`[${this.name}] Restored the autonomous goal. A restart notice is not a goal.`);

@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "id": "bram",
+  "name": "Bram",
+  "profile_version": 1,
+  "backstory": [
+    { "id": "new", "text": "Bram is newer to the village than the others and does not yet know their opinions of him." },
+    { "id": "talk", "text": "Bram fills a silence and assumes people want the story he is telling." }
+  ],
+  "temperament": [
+    "Talks at length.",
+    "Approaches people rather than waiting."
+  ],
+  "interests": ["stories", "the square"],
+  "seed_relationships": []
+}

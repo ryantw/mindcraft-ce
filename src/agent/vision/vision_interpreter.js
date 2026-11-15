@@ -1,12 +1,14 @@
 import { Vec3 } from 'vec3';
+import path from 'path';
 import { Camera } from "./camera.js";
 import fs from 'fs';
+import { agentDataDir } from '../data_dir.js';
 
 export class VisionInterpreter {
     constructor(agent, allow_vision) {
         this.agent = agent;
         this.allow_vision = allow_vision;
-        this.fp = './bots/'+agent.name+'/screenshots/';
+        this.fp = path.join(agentDataDir(agent.name), 'screenshots') + path.sep;
         if (allow_vision) {
             this.camera = new Camera(agent.bot, this.fp);
         }

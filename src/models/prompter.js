@@ -12,6 +12,7 @@ import { selectAPI, createModel } from './_model_map.js';
 import convoManager from '../agent/conversation.js';
 import { attributeTurnsForSummary, durableMemoryView, isTransientMemoryTurn, stripCommandSyntax } from '../agent/chat_hygiene.js';
 import { formatKnownFacts } from '../agent/lessons.js';
+import { agentDataDir } from '../agent/data_dir.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -135,8 +136,9 @@ export class Prompter {
         }
 
         this.skill_libary = new SkillLibrary(agent, this.embedding_model);
-        mkdirSync(`./bots/${name}`, { recursive: true });
-        writeFileSync(`./bots/${name}/last_profile.json`, JSON.stringify(this.profile, null, 4), (err) => {
+        const dataDir = agentDataDir(name);
+        mkdirSync(dataDir, { recursive: true });
+        writeFileSync(path.join(dataDir, 'last_profile.json'), JSON.stringify(this.profile, null, 4), (err) => {
             if (err) {
                 throw new Error('Failed to save profile:', err);
             }
@@ -468,12 +470,10 @@ export class Prompter {
 
     async _saveToFile(logFile, logEntry) {
         let task_id = this.agent.task.task_id;
-        let logDir;
-        if (task_id == null) {
-            logDir = path.join(__dirname, `../../bots/${this.agent.name}/logs`);
-        } else {
-            logDir = path.join(__dirname, `../../bots/${this.agent.name}/logs/${task_id}`);
-        }
+        const logRoot = settings.agent_data_root
+            ? path.join(agentDataDir(this.agent.name), 'logs')
+            : path.join(__dirname, `../../bots/${this.agent.name}/logs`);
+        const logDir = task_id == null ? logRoot : path.join(logRoot, String(task_id));
 
         await fs.mkdir(logDir, { recursive: true });
 

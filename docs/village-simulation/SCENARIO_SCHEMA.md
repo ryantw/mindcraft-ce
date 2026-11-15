@@ -1,12 +1,10 @@
 # Village simulation scenario schema
 
-Spec-Version: 0.2.0
-Status: Proposed schema for later implementation. Not loaded by the application.
+Spec-Version: 0.3.0
+Status: Schema version 1 is loaded by the application.
 Date: 2026-11-15
 
-Revised from 0.1.0. Adds `connection`, plot-owned homes, an admission identity snapshot, a profile checksum, separate lifecycle and activity, and a scenario dream queue. Milestone 1 implements a validator. Until then, nothing in `src/` reads these shapes.
-
-This file is the contract between versioned experiment data and persistent play data. Milestone 1 implements a validator for it. Until then, nothing in `src/` reads these shapes.
+Revised from 0.2.0. Milestone 1 loads this schema. Decisions recorded below: explicit scenario ports, restart-based admission, and where agent files are written.
 
 The examples are illustrations of the contract. They are not a live scenario, not profiles to launch, and not instructions to edit `bots/` or the Minecraft world.
 
@@ -70,7 +68,8 @@ Name collision rule: an inhabitant id or Minecraft name used by the survival run
 Rules:
 
 - `id` matches the directory name. Lowercase, digits, hyphens.
-- `connection` is required. `host`, `port`, `minecraft_version`, and `auth` are the fields `initBot` reads from settings today (`src/utils/mcdata.js`). Values are whatever that server needs. They are not copied from, and must not be written back to, `settings.js`.
+- `connection` is required. `host`, `port`, `minecraft_version`, and `auth` are the fields `initBot` reads from settings today (`src/utils/mcdata.js`). They are not copied from, and must not be written back to, `settings.js`.
+- `port` must be an integer from 1 to 65535. The survival scanner value `-1` is rejected so a scenario cannot attach to whichever local world the scanner finds.
 - If `initBot` later gains another required connection field, it is added here and the schema version increments. `mindserver_port` is not a connection field. It belongs to the supervisor process.
 - `inhabitants` is an ordered list of paths relative to the scenario directory. Length may be any positive number. The first real experiment uses five. Tests may use two. The list may be empty only in a validator fixture, not in a launched scenario.
 - `models.day` and `models.dream` are required and may be changed without code edits. They use the same provider records Mindcraft already accepts (`api`, `model`, optional `params`).
@@ -141,7 +140,7 @@ The checksum covers the profile as admitted. It does not cover `village.json`, s
 
 Profiles still need a Mindcraft model block so the existing loader can run them. Proposed: the scenario runner writes or overlays the day model from `scenario.models.day` at start, and the committed inhabitant file does not fork prompts. If an inhabitant file also contains a `model` object, it overrides the scenario day model for that person only. The dream model is never taken from the inhabitant file; dreaming is a scenario-level role so the population shares one dream configuration unless the scenario itself is changed.
 
-Open. The exact overlay onto `Prompter`'s `_default.json` plus base profile merge is an implementation detail of milestone 1. The constraint is that gameplay prompt text stays shared, and identity text is inserted from this file rather than copied into `profiles/defaults/_default.json`.
+Implemented. The scenario runner builds a profile `{name, model, embedding}` from the inhabitant and `scenario.models.day`. `Prompter` still merges `profiles/defaults/_default.json`, then `base_profile`, then that profile. Gameplay prompt text stays shared. The admission snapshot is written to `identity.json` and is not copied into the day prompt until milestone 3. The dream model is `settings.dream_model` on the agent settings copy. No dream client is constructed.
 
 ## Village file
 
@@ -194,7 +193,8 @@ Rules:
 - `occupant` is the only home assignment. It is an inhabitant id or `null`. `null` is vacant. An inhabitant profile must not repeat it.
 - An inhabitant id appears as `occupant` on at most one plot. A launched inhabitant may appear on none.
 - Setting `occupant` from `null` to a new inhabitant id is how admission assigns a vacant house. No application change.
-- An occupant who is `dead`, `absent`, or removed from the active list stays the occupant. Schema version 1 has no transfer. Validation rejects changing `occupant` from one inhabitant id to another. Only `null` may become an id.
+- An occupant who is `dead`, `absent`, or removed from the active list stays the occupant. Schema version 1 has no transfer. A single file cannot list the same inhabitant on two plots. A new inhabitant may be placed on a plot whose `occupant` is `null`.
+- Editing a plot so that an already admitted life points at a different house does not rewrite `identity.json`. Admission records `home_mismatch` and the snapshot remains the assignment. Startup is not refused for that mismatch.
 - Coordinates are the operator's contract with the world save. How the blocks get placed is the milestone 2 authoring choice, not an agent action. Provisioning a vacant plot is allowed and does not require an inhabitant.
 - `refill` must be `"never"` in schema version 1. Restart and death must not restock containers.
 - Possessions already in a house are left alone when the occupant dies, disconnects, or is no longer listed. The scenario runner must not delete or regenerate them.
@@ -283,9 +283,26 @@ Applied when milestone 4 exists. Milestone 1 only reserves the files.
 - Model prompts. Shared prompt text stays in `profiles/defaults/`. The village inserts identity from `identity.json` at prompt-build time, not from a profile that has drifted since admission.
 - The 500-character summary algorithm. It may still run inside the copied `memory.json` for conversation continuity. It is not `long_term.json`.
 
+## Launch
+
+Implemented. Admission is restart-based. There is no hot add while a scenario process is already running.
+
+```text
+node main.js --scenario village-alpha
+node main.js --scenario scenarios/village-alpha
+```
+
+With `--scenario`, `settings.profiles` are not started and `settings.js` is not modified. Without `--scenario`, `node main.js` is the survival experiment.
+
+To add an inhabitant, add `inhabitants/<id>.json`, list it in `scenario.json`, and optionally set a vacant plot's `occupant` to that id. Start the scenario again. The new directory is created. Existing lives are not recopied. Removing a path from `scenario.json` does not delete `runtime/scenarios/<scenario_id>/<id>/` and does not set `dead`.
+
+Agent files for a village life (memory, histories, plan, verified lessons, last profile, logs, screenshots, action code) are written under `runtime/scenarios/<scenario_id>/<inhabitant_id>/` via `settings.agent_data_root`. The dream model is stored as `settings.dream_model` and no dream client is constructed. The day model is the profile `model` passed through the existing prompter merge. Backstory text is not inserted into the day prompt until milestone 3; the admission snapshot is still the identity of record.
+
+The autonomous loop is started with a fixed preamble that `usableGoal` does not treat as an ambition. It is not the survival `init_message`.
+
 ## Admission
 
-Proposed procedure. Milestone 1 implements the files and the one-time copy. Milestone 2 is the world placement.
+Implemented for files and the one-time copy. Milestone 2 is the world placement.
 
 1. Add `inhabitants/<id>.json` with a unique `id`, Minecraft `name`, and `profile_version`.
 2. Optionally set `occupant` on a vacant plot (`null`) to that id. Skip this step to admit someone with no house.

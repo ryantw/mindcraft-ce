@@ -1,10 +1,10 @@
 # Village simulation roadmap
 
-Spec-Version: 0.2.0
-Status: Accepted design. Not implemented.
+Spec-Version: 0.3.0
+Status: Milestone 1 is implemented. Later milestones are not.
 Date: 2026-11-15
 
-Revised from 0.1.0. Milestone order is unchanged. Milestone 1 now includes connection isolation, the admission snapshot, the death gate on every start path, and a hook so autonomy runs with no assigned ambition. Live permadeath and dreaming stay later.
+Revised from 0.2.0. Milestone 1 is in the application. Milestone order is unchanged. Live permadeath and dreaming stay later.
 
 Milestones are sequential. A later milestone may be designed against this document, but it is not started until the previous milestone's acceptance criteria are met. The recommended first implementation is milestone 1.
 
@@ -14,7 +14,19 @@ The survival experiment (current `settings.js`, `profiles/agent_0*.json`, and `b
 
 ## Milestone 1 — Simulation foundation
 
+Status: Implemented.
+
 Configuration-driven scenario, isolated runtime, population registry, admission, and lifecycle boundaries. No dreaming, no world edits, no new gameplay.
+
+Implementation choices locked with this milestone:
+
+- Select a scenario with `node main.js --scenario <id>` or `node main.js --scenario <path-to-scenario-directory>`. That path does not launch `settings.profiles` and does not write `settings.js`.
+- `connection.port` must be an integer from 1 to 65535. The survival scanner value `-1` is rejected.
+- Admission runs when the scenario process starts. Adding a person is a data change plus a later restart. Hot admission while a process is already up is not implemented.
+- Each inhabitant's agent files go under `runtime/scenarios/<scenario_id>/<inhabitant_id>/` through `settings.agent_data_root` on that agent's settings copy. `runtime/` is play data and is gitignored.
+- A plot edit that points an admitted life at a different house is recorded as `home_mismatch`. It does not rewrite `identity.json` and it does not refuse startup. Two plots naming the same occupant in one file is a hard error.
+- The day model is overlaid as the profile `model` and still merged by `Prompter` with `profiles/defaults/_default.json` and the scenario `base_profile`. The dream model is stored as `settings.dream_model` and no dream client is built. The admission snapshot is not inserted into the day prompt until milestone 3.
+- The autonomous loop starts from `VILLAGE_AUTONOMY_PREAMBLE` in `src/agent/startup_goal.js`. `usableGoal` ignores that text, so it is not stored as an ambition. `init_message` on the village settings copy is null.
 
 ### Definition of done
 

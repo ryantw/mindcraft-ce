@@ -1,16 +1,19 @@
 import { writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs';
+import path from 'path';
 import { NPCData } from './npc/data.js';
 import settings from './settings.js';
+import { agentDataDir } from './data_dir.js';
 
 
 export class History {
     constructor(agent) {
         this.agent = agent;
         this.name = agent.name;
-        this.memory_fp = `./bots/${this.name}/memory.json`;
+        this.dataDir = agentDataDir(this.name);
+        this.memory_fp = path.join(this.dataDir, 'memory.json');
         this.full_history_fp = undefined;
 
-        mkdirSync(`./bots/${this.name}/histories`, { recursive: true });
+        mkdirSync(path.join(this.dataDir, 'histories'), { recursive: true });
 
         this.turns = [];
 
@@ -45,7 +48,7 @@ export class History {
     async appendFullHistory(to_store) {
         if (this.full_history_fp === undefined) {
             const string_timestamp = new Date().toLocaleString().replace(/[/:]/g, '-').replace(/ /g, '').replace(/,/g, '_');
-            this.full_history_fp = `./bots/${this.name}/histories/${string_timestamp}.json`;
+            this.full_history_fp = path.join(this.dataDir, 'histories', `${string_timestamp}.json`);
             writeFileSync(this.full_history_fp, '[]', 'utf8');
         }
         try {

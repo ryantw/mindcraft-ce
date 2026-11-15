@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "id": "nell",
+  "name": "Nell",
+  "profile_version": 1,
+  "backstory": [
+    { "id": "flowers", "text": "Nell keeps flowers by her door and dislikes them being picked without asking." },
+    { "id": "cass", "text": "Nell considers Cass a friend." }
+  ],
+  "temperament": [
+    "Warm with people she knows.",
+    "Protective of her own doorway."
+  ],
+  "interests": ["flowers", "quiet visits"],
+  "seed_relationships": [
+    {
+      "other_id": "cass",
+      "stance": "friend",
+      "note": "Glad when Cass visits. This is Nell's view, not necessarily Cass's."
+    }
+  ]
+}

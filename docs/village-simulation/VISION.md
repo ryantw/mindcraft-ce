@@ -1,10 +1,10 @@
 # Village simulation vision
 
-Spec-Version: 0.2.0
-Status: Accepted design. Not implemented.
+Spec-Version: 0.3.0
+Status: Accepted design. Milestone 1 is implemented. Later milestones are not.
 Date: 2026-11-15
 
-Revised from 0.1.0. Scenario connections are isolated from the survival server. Houses are independent of inhabitants. Admission freezes an identity snapshot. Lifecycle state is separate from activity, and dead is irreversible. Having no assigned ambition does not stop autonomy. Dreams are queued from real sleep and may finish after waking.
+Revised from 0.2.0. The product intent is unchanged. Milestone 1 now loads scenarios, admits inhabitants, and isolates their runtime. Dreams, provisioning, and live permadeath remain later milestones.
 
 This document is the product intent for an autonomous Minecraft social simulation built on Mindcraft CE. It does not authorize implementation by itself. Architecture, milestones, and file schemas are in the sibling documents.
 
@@ -13,7 +13,7 @@ Status labels used throughout `docs/village-simulation/`:
 | Label | Meaning |
 | --- | --- |
 | Implemented | Present in this repository today. |
-| Agreed | A principle or decision accepted for this simulation. No village-simulation code exists yet. |
+| Agreed | A principle or decision accepted for this simulation. Whether code exists yet is the milestone status in ROADMAP.md. |
 | Proposed | A structure that follows from the agreed principles and should guide implementation. |
 | Future | Explicitly deferred. Not part of the first experiment. |
 | Open | Requires investigation before an implementation choice is locked. |

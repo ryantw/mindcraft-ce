@@ -1,9 +1,16 @@
 // This code uses Dashscope and HTTP to ensure the latest support for the Qwen model.
 // Qwen is also compatible with the OpenAI API format;
 
+import fs from 'fs/promises';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import OpenAIApi from 'openai';
 import { getKey, hasKey } from '../utils/keys.js';
 import { strictFormat } from '../utils/text.js';
+import settings from '../agent/settings.js';
+import { agentDataDir } from '../agent/data_dir.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export class VLLM {
     static prefix = 'vllm';
@@ -62,12 +69,10 @@ export class VLLM {
     async saveToFile(logFile, logEntry) {
         let task_id = this.agent.task.task_id;
         console.log(task_id)
-        let logDir;
-        if (this.task_id === null) {
-            logDir = path.join(__dirname, `../../bots/${this.agent.name}/logs`);
-        } else {
-            logDir = path.join(__dirname, `../../bots/${this.agent.name}/logs/${task_id}`);
-        }
+        const logRoot = settings.agent_data_root
+            ? path.join(agentDataDir(this.agent.name), 'logs')
+            : path.join(__dirname, `../../bots/${this.agent.name}/logs`);
+        const logDir = this.task_id === null ? logRoot : path.join(logRoot, String(task_id));
 
         await fs.mkdir(logDir, { recursive: true });
 

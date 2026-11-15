@@ -4,6 +4,7 @@ import { AgentProcess } from '../process/agent_process.js';
 import { getServer } from './mcserver.js';
 import open from 'open';
 import { mindServerClientUrl, resolveControlToken } from './security.js';
+import { readLife } from '../village/life.js';
 
 let mindserver;
 let connected = false;
@@ -67,6 +68,15 @@ export async function createAgent(settings) {
     }
     settings = JSON.parse(JSON.stringify(settings));
     let agent_name = settings.profile.name;
+    if (settings.agent_data_root) {
+        const life = readLife(settings.agent_data_root);
+        if (!life) {
+            return { success: false, error: 'Missing life record. Admit the inhabitant before starting.' };
+        }
+        if (life.lifecycle === 'dead') {
+            return { success: false, error: 'Dead inhabitants cannot be started.' };
+        }
+    }
     const agentIndex = agent_count++;
     const viewer_port = 3000 + agentIndex;
     const process_token = randomBytes(32).toString('hex');
@@ -88,8 +98,14 @@ export async function createAgent(settings) {
             console.warn(`Attempting to connect anyway...`);
         }
 
-        const agentProcess = new AgentProcess(agent_name, mindserver_port, process_token);
+        const agentProcess = new AgentProcess(agent_name, mindserver_port, process_token, {
+            dataRoot: settings.agent_data_root || null,
+        });
         agentProcess.start(load_memory, init_message, agentIndex);
+        if (agentProcess.refused) {
+            destroyAgent(agent_name);
+            return { success: false, error: agentProcess.refused };
+        }
         agent_processes[settings.profile.name] = agentProcess;
     } catch (error) {
         console.error(`Error creating agent ${agent_name}:`, error);

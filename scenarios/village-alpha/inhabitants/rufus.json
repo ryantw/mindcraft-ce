@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "id": "rufus",
+  "name": "Rufus",
+  "profile_version": 1,
+  "backstory": [
+    { "id": "hands", "text": "Rufus notices loose doors and uneven paths and likes to put them right." },
+    { "id": "cass", "text": "Rufus knows Cass by sight and considers them an acquaintance, not a close friend." }
+  ],
+  "temperament": [
+    "Practical.",
+    "Offers help before offering opinions."
+  ],
+  "interests": ["paths", "doors", "tools that still work"],
+  "seed_relationships": [
+    {
+      "other_id": "cass",
+      "stance": "acquaintance",
+      "note": "Has spoken with Cass. Does not assume friendship."
+    }
+  ]
+}

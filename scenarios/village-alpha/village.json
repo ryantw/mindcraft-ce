@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "id": "village-alpha-places",
+  "spawn_dimension": "overworld",
+  "notes": "Illustrative coordinates only. No physical village has been built or verified in a Minecraft world.",
+  "plots": [
+    {
+      "id": "plot-ione",
+      "occupant": "ione",
+      "home_marker": [100, 64, 100],
+      "bed": [102, 64, 101],
+      "chest": [101, 64, 102],
+      "door": [100, 64, 99]
+    },
+    {
+      "id": "plot-cass",
+      "occupant": "cass",
+      "home_marker": [120, 64, 100],
+      "bed": [122, 64, 101],
+      "chest": [121, 64, 102],
+      "door": [120, 64, 99]
+    },
+    {
+      "id": "plot-rufus",
+      "occupant": "rufus",
+      "home_marker": [140, 64, 100],
+      "bed": [142, 64, 101],
+      "chest": [141, 64, 102],
+      "door": [140, 64, 99]
+    },
+    {
+      "id": "plot-nell",
+      "occupant": "nell",
+      "home_marker": [100, 64, 130],
+      "bed": [102, 64, 131],
+      "chest": [101, 64, 132],
+      "door": [100, 64, 129]
+    },
+    {
+      "id": "plot-bram",
+      "occupant": "bram",
+      "home_marker": [120, 64, 130],
+      "bed": [122, 64, 131],
+      "chest": [121, 64, 132],
+      "door": [120, 64, 129]
+    },
+    {
+      "id": "plot-vacant",
+      "occupant": null,
+      "notes": "Vacant house. Assign a new inhabitant by setting occupant to their id.",
+      "home_marker": [140, 64, 130],
+      "bed": [142, 64, 131],
+      "chest": [141, 64, 132],
+      "door": [140, 64, 129]
+    }
+  ],
+  "public": [
+    {
+      "id": "square",
+      "marker": [120, 64, 115],
+      "notes": "Open meeting ground. Not verified in a world."
+    }
+  ],
+  "provisions": {
+    "per_home": {
+      "food": [{ "item": "bread", "count": 16 }],
+      "tools": ["stone_pickaxe", "stone_axe"],
+      "also": ["crafting_table", "furnace", "white_bed"]
+    },
+    "refill": "never"
+  },
+  "paths": [
+    { "from": "plot-ione", "to": "square", "walkable_without_breaking": true },
+    { "from": "plot-cass", "to": "square", "walkable_without_breaking": true },
+    { "from": "plot-rufus", "to": "square", "walkable_without_breaking": true },
+    { "from": "plot-nell", "to": "square", "walkable_without_breaking": true },
+    { "from": "plot-bram", "to": "square", "walkable_without_breaking": true },
+    { "from": "plot-vacant", "to": "square", "walkable_without_breaking": true }
+  ]
+}

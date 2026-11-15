@@ -1,5 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
 import path from 'path';
+import settings from './settings.js';
+import { agentDataDir } from './data_dir.js';
 
 /**
  * Minimal store for lessons the agent has verified. This is deliberately not a
@@ -19,6 +21,7 @@ export const ACCOMPLISHMENT_TAG = 'accomplishment';
 const ACCEPTED_BASES = new Set(['mechanics', 'observed']);
 
 function lessonsFile(agent, baseDir) {
+    if (settings.agent_data_root) return path.join(agentDataDir(agent.name), 'verified_lessons.json');
     return path.join(baseDir || agent.lessonsBaseDir || 'bots', agent.name, 'verified_lessons.json');
 }
 

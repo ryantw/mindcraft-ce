@@ -7,6 +7,8 @@ import * as skills from './library/skills.js';
 import * as world from './library/world.js';
 import { Vec3 } from 'vec3';
 import {ESLint} from "eslint";
+import settings from './settings.js';
+import { agentDataDir } from './data_dir.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -15,10 +17,15 @@ export class Coder {
         this.agent = agent;
         this.file_counter = 0;
         this.fp = '/bots/'+agent.name+'/action-code/';
+        this._pathPrefix = '.';
+        if (settings.agent_data_root) {
+            this.fp = path.join(agentDataDir(agent.name), 'action-code') + path.sep;
+            this._pathPrefix = '';
+        }
         this.code_template = '';
         this.code_lint_template = '';
         this.ready = null;
-        mkdirSync('.' + this.fp, { recursive: true });
+        mkdirSync(this._pathPrefix + this.fp, { recursive: true });
     }
 
     async _loadTemplates() {
@@ -174,7 +181,7 @@ export class Coder {
         let filename = this.file_counter + '.js';
         this.file_counter++;
         
-        let write_result = await this._writeFilePromise('.' + this.fp + filename, src);
+        let write_result = await this._writeFilePromise(this._pathPrefix + this.fp + filename, src);
         const compartment = makeCompartment({
             skills,
             log: skills.log,

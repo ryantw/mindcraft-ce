@@ -9,6 +9,7 @@ import path from 'path';
 import Vec3 from 'vec3';
 import * as world from './library/world.js';
 import settings from './settings.js';
+import { agentDataDir } from './data_dir.js';
 import { checkProposalFeasibility, describeAvailableActions, describeConstruction } from './plan_feasibility.js';
 import { analyzeConstruction, effectivePlanMaterials } from './plan_geometry.js';
 import { describeLedger, materialLedger, normalizeMaterials, redundantStepReason, rightsizeResourceStep, stepProduces } from './plan_resources.js';
@@ -128,7 +129,7 @@ function normalizeEvidence(raw, action) {
 export class PlanManager {
     constructor(agent, baseDir='bots') {
         this.agent = agent;
-        this.dir = path.join(baseDir, agent.name);
+        this.dir = settings.agent_data_root ? agentDataDir(agent.name) : path.join(baseDir, agent.name);
         this.file = path.join(this.dir, 'plan.json');
         this.state = { version: PLAN_VERSION, current: null, archive: [] };
         this.planningPromise = null;

@@ -3,6 +3,8 @@ import settings from './settings.js';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import { readFileSync } from 'fs';
+import { loadScenario, resolveScenarioDirectory } from './src/village/load.js';
+import { prepareScenario } from './src/village/launch.js';
 import { parseBooleanEnv, parseIntegerEnv, parseJsonEnv, parseJsonObjectEnv } from './src/utils/env.js';
 
 function parseArguments() {
@@ -18,6 +20,10 @@ function parseArguments() {
         .option('task_id', {
             type: 'string',
             describe: 'Task ID to execute'
+        })
+        .option('scenario', {
+            type: 'string',
+            describe: 'Village scenario id under scenarios/, or a path to a scenario directory. Omits settings.js profiles.',
         })
         .help()
         .alias('help', 'h')
@@ -90,11 +96,34 @@ if (process.env.SETTINGS_JSON !== undefined) {
 
 await Mindcraft.init(false, settings.mindserver_port, settings.auto_open_ui);
 
-for (let profile of settings.profiles) {
-    const profile_json = JSON.parse(readFileSync(profile, 'utf8'));
-    settings.profile = profile_json;
-    const result = await Mindcraft.createAgent(settings);
-    if (!result.success) {
-        console.error(`Failed to create agent ${profile_json.name}: ${result.error}`);
+if (args.scenario) {
+    const reservedNames = [];
+    for (const profilePath of settings.profiles || []) {
+        try {
+            const existing = JSON.parse(readFileSync(profilePath, 'utf8'));
+            if (existing.name) reservedNames.push(existing.name);
+        } catch (error) {
+            console.error(`Could not read survival profile ${profilePath}: ${error.message}`);
+        }
+    }
+    const bundle = loadScenario(resolveScenarioDirectory(args.scenario), { reservedNames, forLaunch: true });
+    const prepared = prepareScenario(bundle, settings);
+    if (prepared.refused.length) {
+        console.log(`Not starting deceased inhabitants: ${prepared.refused.map(record => record.profile.name).join(', ')}`);
+    }
+    for (const agentSettings of prepared.agents) {
+        const result = await Mindcraft.createAgent(agentSettings);
+        if (!result.success) {
+            console.error(`Failed to create agent ${agentSettings.profile.name}: ${result.error}`);
+        }
+    }
+} else {
+    for (let profile of settings.profiles) {
+        const profile_json = JSON.parse(readFileSync(profile, 'utf8'));
+        settings.profile = profile_json;
+        const result = await Mindcraft.createAgent(settings);
+        if (!result.success) {
+            console.error(`Failed to create agent ${profile_json.name}: ${result.error}`);
+        }
     }
 }

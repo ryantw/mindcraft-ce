@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "id": "cass",
+  "name": "Cass",
+  "profile_version": 1,
+  "backstory": [
+    { "id": "square", "text": "Cass likes the square and will walk there without being asked." },
+    { "id": "nell", "text": "Cass considers Nell a friend and often starts the conversation." }
+  ],
+  "temperament": [
+    "Talks readily.",
+    "Would rather meet someone than stay inside all day."
+  ],
+  "interests": ["the square", "other people's news"],
+  "seed_relationships": [
+    {
+      "other_id": "nell",
+      "stance": "friend",
+      "note": "Trusts Nell and expects to be welcome at her door."
+    }
+  ]
+}

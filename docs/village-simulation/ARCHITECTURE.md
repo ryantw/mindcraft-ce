@@ -1,7 +1,7 @@
 # Village simulation architecture
 
-Spec-Version: 0.2.0
-Status: Accepted design. Not implemented.
+Spec-Version: 0.3.0
+Status: Accepted design. Milestone 1 is implemented. Later milestones are not.
 Date: 2026-11-15
 
 Revised from 0.1.0. See [VISION.md](VISION.md) for the product changes. This document now separates lifecycle from activity, makes plots the only home assignment, and treats dreaming as a durable queue rather than a life state.
@@ -118,7 +118,7 @@ Open. The Minecraft mechanism that keeps a dead body from returning (kick and su
 
 ## Autonomy without an assigned goal
 
-Agreed behavior. Milestone 1 has to find a compatible hook, because the current code will not loop with an empty prompt.
+Implemented. The village settings copy sets `village_autonomy` and clears `init_message`. `resolveVillageAutonomy` in `src/agent/startup_goal.js` starts the existing self-prompt loop with `VILLAGE_AUTONOMY_PREAMBLE` when there is no saved personal goal. `usableGoal` treats that preamble the same way it treats the recovery notice: it is not a lifelong goal. A saved usable self-prompt still wins. Survival startup never calls this function.
 
 Three different things:
 
@@ -136,7 +136,7 @@ Known dependency, to be handled inside milestone 1:
 - `Agent.start` only calls that after `resolveStartupGoal` finds a saved self-prompt, a process init message, or `settings.init_message` (`src/agent/agent.js`, `src/agent/startup_goal.js`).
 - `handleLoad` throws if the saved state is active and the prompt is empty.
 
-The scenario-level mechanism must start that same loop for a village inhabitant who has no intention and no ambition, must not persist the loop's preamble as their lifelong goal, and must leave the survival startup path byte-for-byte in behavior when no scenario is selected. Milestone 1 investigates the call chain and adds the smallest hook that satisfies those three constraints. The product rule is not an open question. The function to change is what the milestone is there to confirm.
+That hook is in place. A village inhabitant with no intention and no ambition still enters the loop. The preamble is not persisted as their ambition. `node main.js` with no `--scenario` still resolves `settings.init_message` and does not use the village hook.
 
 ## Cognitive architecture
 
@@ -277,9 +277,9 @@ Agreed, and already true of the gameplay stack:
 
 Collected here so implementation does not pretend they are settled.
 
-Decided, and no longer open: runtime root `runtime/scenarios/<scenario_id>/`; survival names are rejected; plots own home assignment; admission snapshot plus checksum; dead is terminal across every start path; no sleep means no dream; the dream queue outlives the bed; no assigned ambition still runs the autonomous loop.
+Decided, and no longer open: runtime root `runtime/scenarios/<scenario_id>/` via `agent_data_root`; CLI `--scenario`; explicit TCP ports; survival names are rejected; plots own home assignment; a later house edit is `home_mismatch` rather than a refused start; admission snapshot plus checksum; restart-based admission; dead is terminal across every start path; crash, disconnect, and operator stop are `absent`; no sleep means no dream; the dream model is configuration only until milestone 4; the day-model overlay reuses the prompter merge; the admission snapshot is persisted in milestone 1 and enters the day prompt in milestone 3; no assigned ambition still runs the autonomous loop through `VILLAGE_AUTONOMY_PREAMBLE`.
 
-Still open. None of these block milestone 1. The autonomy hook's call site is milestone 1's investigation, and the required behavior is already fixed.
+Still open. None of these are milestone 1.
 
 1. Permadeath body in a live server: how the Minecraft session ends. The supervisor gate is not open. Milestone 3.
 2. Audible range and death-message leakage through public chat and MindServer. Milestone 3.

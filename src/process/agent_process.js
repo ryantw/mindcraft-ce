@@ -1,18 +1,31 @@
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { logoutAgent } from '../mindcraft/mindserver.js';
+import { beginProcess, recordProcessExit } from '../village/supervise.js';
 
 const init_agent_path = fileURLToPath(new URL('./init_agent.js', import.meta.url));
 
 export class AgentProcess {
-    constructor(name, port, process_token) {
+    constructor(name, port, process_token, options = {}) {
         this.name = name;
         this.port = port;
         this.process_token = process_token;
+        this.dataRoot = options.dataRoot || null;
+        this.refused = null;
     }
 
     start(load_memory=false, init_message=null, count_id=0) {
         this.count_id = count_id;
+        if (this.dataRoot) {
+            const gate = beginProcess(this.dataRoot);
+            if (!gate.ok) {
+                this.refused = gate.reason;
+                this.running = false;
+                console.error(`[${this.name}] ${gate.reason}`);
+                return;
+            }
+        }
+        this.refused = null;
         this.running = true;
 
         let args = [init_agent_path, this.name];
@@ -38,6 +51,8 @@ export class AgentProcess {
             this.running = false;
             logoutAgent(this.name);
 
+            const decision = this.dataRoot ? recordProcessExit(this.dataRoot, { code, signal }) : null;
+
             if (code > 1) {
                 console.log(`Ending task`);
                 process.exit(code);
@@ -47,6 +62,10 @@ export class AgentProcess {
                 // agent must run for at least 10 seconds before restarting
                 if (Date.now() - last_restart < 10000) {
                     console.error(`Agent process exited too quickly and will not be restarted.`);
+                    return;
+                }
+                if (decision && !decision.restart) {
+                    console.error(`[${this.name}] Not restarting a ${decision.lifecycle || 'refused'} life.`);
                     return;
                 }
                 console.log('Restarting agent...');

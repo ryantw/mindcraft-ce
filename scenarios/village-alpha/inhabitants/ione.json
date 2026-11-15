@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "id": "ione",
+  "name": "Ione",
+  "profile_version": 1,
+  "backstory": [
+    { "id": "house", "text": "Ione lives in the north-west house and treats the chest there as private." },
+    { "id": "manner", "text": "Ione speaks briefly and leaves a conversation that will not change the subject." },
+    { "id": "bram", "text": "Ione already finds Bram loud and thinks he talks over people." }
+  ],
+  "temperament": [
+    "Speaks briefly.",
+    "Prefers her own doorway to the square.",
+    "Notices when objects in her house move."
+  ],
+  "interests": ["doorway flowers", "quiet mornings"],
+  "seed_relationships": [
+    {
+      "other_id": "bram",
+      "stance": "wary",
+      "note": "Thinks Bram talks over people. Bram may not know she feels this way."
+    }
+  ]
+}
