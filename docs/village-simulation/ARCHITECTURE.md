@@ -1,0 +1,292 @@
+# Village simulation architecture
+
+Spec-Version: 0.2.0
+Status: Accepted design. Not implemented.
+Date: 2026-11-15
+
+Revised from 0.1.0. See [VISION.md](VISION.md) for the product changes. This document now separates lifecycle from activity, makes plots the only home assignment, and treats dreaming as a durable queue rather than a life state.
+
+Read [VISION.md](VISION.md) for intent and [SCENARIO_SCHEMA.md](SCENARIO_SCHEMA.md) for files. This document says what Mindcraft already does, what the simulation reuses, and what is still only a proposal.
+
+## Reuse, do not fork
+
+Agreed. The village simulation is a scenario and a set of private stores on top of the current agent. It is not a second bot runtime, a second command language, or a second planning engine.
+
+One inhabitant is still a Mindcraft agent process: `main.js` loads a profile, `createAgent` in `src/mindcraft/mindcraft.js` spawns `AgentProcess`, and `src/process/init_agent.js` constructs `Agent`. The village adds a scenario identity, a lifecycle, and memory files that the existing prompter and planner can read. Gameplay stays in the modules below.
+
+### Implemented baseline to keep
+
+| Concern | Where it lives today | What it already guarantees |
+| --- | --- | --- |
+| Process per agent | `src/process/agent_process.js`, `src/mindcraft/mindcraft.js` | Each profile is its own Node process. A crash restarts that process and reloads memory. The restart notice is not a goal (`src/agent/startup_goal.js`). |
+| Profile merge | `src/models/prompter.js` | `_default.json`, then `profiles/defaults/<base_profile>.json`, then the agent profile. Identity and model are data. |
+| Population launch | `main.js`, `settings.profiles` | Any list of profile paths. A new file on that list is a new agent without an `agent.js` edit. There is no scenario boundary yet: every run shares one settings object, one Minecraft host and port, and `bots/<name>/`. |
+| Commands | `src/agent/commands/` | Shared action and query lists. `operatorOnly` commands (`!stfu`, `!restart`, `!clearChat`) are stripped from the model-facing docs. `!newAction` refuses to run while `allow_insecure_coding` is false. |
+| Self-prompt and goal | `src/agent/self_prompter.js`, `src/agent/startup_goal.js`, `!goal` | The autonomous loop starts only when `start` is given a non-empty prompt. `Agent.start` supplies the saved self-prompt, else the process init message, else `settings.init_message`. An empty prompt is ignored and the loop does not run. The survival `init_message` is that fallback today. A village scenario must not replace it. |
+| Persistent plans | `src/agent/plan_manager.js` and `plan_feasibility.js`, `plan_geometry.js`, `plan_resources.js` | The model proposes a short JSON plan. Code accepts only real commands and real parameters, checks construction limits, and tracks materials against live inventory. Evidence types are `verified_action`, `inventory_min`, `inventory_delta`, `block_at`, `block_nearby`, and `position_near`. Stored at `bots/<name>/plan.json`. |
+| Structured outcomes | `src/agent/action_outcome.js`, `src/agent/action_manager.js` | Success and failure come from inventory and world diffs, not from the model's claim. Repeat attempts of the same behavior are blocked. Recent placements are remembered in process so the agent does not immediately dig up its own floor. |
+| Construction | `src/agent/library/construction.js`, `src/agent/construction_area.js` | `placeHere`, `placeBlockAt`, `buildLine`, `buildPlane` place blocks from inventory only. No commands, no teleports, no generated blocks. Size, distance, and time are capped. Failed terrain in an area blocks further guesses there until the agent leaves. |
+| Inventory and recipes | `src/agent/commands/queries.js`, `src/agent/mechanics.js`, `src/utils/crafting.js` | `!inventory` reports real counts, equipment durability, free slots, and at most four code-computed "can craft" lines. Recipes come from `minecraft-data`. |
+| Reflection | `src/agent/reasoning.js`, `src/agent/reflection_triggers.js`, `src/agent/lessons.js` | `!think` and automatic reflection are private, serialized (`max_concurrent: 1`), and told not to invent recipes or assign a life goal. Lessons persist only when code derived them (`mechanics` or `observed`). The model cannot write a lesson. Caps today: 12 lessons and 8 accomplishments, in `bots/<name>/verified_lessons.json`. |
+| Conversation hygiene | `src/agent/chat_hygiene.js`, `src/agent/conversation.js`, `src/agent/system_events.js` | Action results are stripped from outgoing chat. Peer speech is labeled and is not stored as the listener's own deed. System text is marked as observation so words like "stopped" are not taken as `!stop`. |
+| Modes and body | `src/agent/modes.js`, auto-eat in `src/agent/agent.js` | Survival modes (self-preservation, unstuck, self-defense, hunting, item collecting, and others) and auto-eat already keep a body alive without a plan. |
+| Bed | `goToBed` in `src/agent/library/skills.js` | Finds a bed within 32 blocks, sleeps, and waits until `bot.isSleeping` is clear. No reflection runs in that wait. Time-of-day events (`sunrise`, `noon`, `sunset`, `midnight`) are emitted in `agent.js` and have no listeners. |
+| Places | `src/agent/memory_bank.js` | In-process named coordinates, including `last_death_position`. Not written by `history.save`. Lost on process exit unless the chat summary happens to mention them. |
+| Short summary | `src/agent/history.js` | `bots/<name>/memory.json` holds a single summary string, sliced at 500 characters, plus the live turn window (`settings.max_messages`, currently 15). Older turns are appended under `bots/<name>/histories/`. The summary prompt tells the model to drop inventory, positions, commands, and routine outcomes. |
+| Observer shell | `src/mindcraft/mindserver.js` | Start, stop, restart, settings, chat, and bot output for the operator. It is not a journal or relationship viewer. |
+| Death today | `agent.js` death and `messagestr` handlers | The agent respawns. A system observation tells them to continue the current objective. Other inhabitants are not given a structured death fact, but public Minecraft chat and the MindServer message path are not a model of who was close enough to hear. |
+
+### What the village must not duplicate
+
+Proposed. New village code should call these, not reimplement them:
+
+- Command execution, pathfinding, collecting, crafting, smelting, and construction.
+- Plan validation, material ledger, and structured outcomes.
+- Lesson records for verified crafts and placements.
+- Chat attribution and the private reflection step.
+- Profile loading and one-process-per-inhabitant.
+
+The 500-character summary remains the survival experiment's memory. For a village scenario it is not the long-term bank. Do not "fix" survival memory by making the village bank the global `History.memory` for every profile.
+
+## Two layers of data
+
+Agreed. Details and fields are in [SCENARIO_SCHEMA.md](SCENARIO_SCHEMA.md).
+
+**Versioned scenario data** is reviewed and committed. It describes one experiment: scenario id, Minecraft connection, model choices, village layout, and each inhabitant's admission profile (stable id, backstory, initial temperament, optional seed relationships). Editing a profile after someone has been admitted does not edit that life. The admission snapshot does.
+
+**Persistent runtime state** is produced by play. It is private per inhabitant per scenario: the identity snapshot, episodes, long-term bank, relationships after experience, journal, morning brief, intentions, craft ledger, life state, plus the existing Mindcraft files (`memory.json`, `plan.json`, `verified_lessons.json`, `histories/`). A scenario-level dream queue sits beside those directories. This tree is not a source of personality in git. Agents and coding sessions do not reset it to tidy a branch.
+
+A restart loads an existing life. It does not run admission again. It must not copy the profile's backstory, temperament, seed relationships, or starting supplies over files or chests that already exist.
+
+### What a scenario isolates
+
+Agreed. One scenario is one population, one Minecraft connection, one runtime tree, and one process supervisor. The survival experiment is the run that does not pass a scenario: `node main.js` with `settings.js`.
+
+| Boundary | Survival experiment | Village scenario |
+| --- | --- | --- |
+| Minecraft connection | `settings.js` `host`, `port`, `minecraft_version`, `auth`. `initBot` in `src/utils/mcdata.js` reads those fields. | `scenario.connection` with the same fields. The scenario runner passes them into that run's agent settings. It does not write `settings.js`. |
+| Runtime files | `bots/<name>/` | `runtime/scenarios/<scenario_id>/<inhabitant_id>/` |
+| Dream queue | None | `runtime/scenarios/<scenario_id>/dream_queue.json`, used in milestone 4 |
+| Who is started | `settings.profiles` | The scenario's inhabitant list |
+| Process supervisor | `AgentProcess` restarts on exit. MindServer `start-agent` and `restart-agent` start whatever was registered. | The same mechanisms, but only after a death gate. A dead life is not started from the exit handler, from MindServer start or restart, or from the scenario's initial launch loop. |
+
+`mindserver_port` stays with the supervisor process. It is the observer and control channel, not the world. Two scenarios must not share a runtime directory. They may share a MindServer only if each connection and each runtime root stay distinct. Milestone 1 does not require two scenarios running at once. It does require that launching one scenario leaves the survival host, port, and `bots/` tree unchanged.
+
+Name collision rule: an inhabitant id or Minecraft name used by the survival run is rejected. The first village cohort uses new names.
+
+## Homes
+
+Agreed. Houses and people are different records.
+
+- A plot in `village.json` is a house. `occupant` is either an inhabitant id or `null`. `null` is a vacant house.
+- That field is the only home assignment. Inhabitant profiles do not contain a home id.
+- Admitting someone into a vacant house is setting `occupant` on that plot. No application code change.
+- A plot whose occupant already has a life, including a dead life, is not vacant. Reassignment and inheritance are deferred. The loader must not clear `occupant` on death, absence, or removal from the active list.
+- The house and whatever is in its containers stay. No automatic delete, refill, transfer, or regeneration.
+- An inhabitant may be admitted with no plot. They then have no assigned home until a vacant plot names them, and only if no snapshot has already recorded a different assignment.
+
+The admission snapshot copies the plot id it found at admission, or `null`. If a later `village.json` names a different occupant for that life, the loader reports a mismatch and keeps the snapshot. It does not move the life or restock the house.
+
+## Lifecycle
+
+Agreed. Lifecycle is durable. Activity is temporary. Dreaming is not a lifecycle state.
+
+The current process only knows running and exited. Exit triggers an automatic restart (`AgentProcess` in `src/process/agent_process.js`). MindServer exposes `start-agent` and `restart-agent` (`src/mindcraft/mindserver.js`). Every one of those entry points, plus the scenario launch loop, must refuse a dead life. Milestone 1 tests that gate with fixtures. It does not implement permadeath inside a live Minecraft session.
+
+| Lifecycle | Meaning | How it changes |
+| --- | --- | --- |
+| `admitted` | Snapshot exists. Process has not taken the life into the world. | Created once, when the runtime directory is first made. |
+| `alive` | This life may be in the world and may act, sleep, or be mid-dream-job. | Start of a non-dead life. |
+| `absent` | Process is down. History unchanged. | Crash, network disconnect, or operator stop from `alive`. |
+| `dead` | This life is over. Irreversible. Files stay. | A verified death, from milestone 3 on. Milestone 1 only allows tests to set it. |
+
+There is no transition out of `dead`. A second death event does not create a second life.
+
+Activity exists only while lifecycle is `alive`. It is not the life record and it is rebuilt when the process starts. Crash must not leave a stale activity that blocks restart.
+
+| Activity | Meaning |
+| --- | --- |
+| `awake` | In the world and not in a bed. |
+| `asleep` | `bot.isSleeping` is true. This is the preferred dream trigger. |
+| Dream job | Not an activity. A row on the scenario dream queue. The inhabitant stays `alive` whether the job is queued, running, or already applied, and whether they are still `asleep` or already `awake`. |
+
+"Alive and dreaming" means lifecycle `alive` plus a dream job in progress. It does not replace `alive`.
+
+Disconnection uses the existing restart notice only for `alive` or `absent`. A dead inhabitant is not handed `Agent process restarted.` and is not placed back at spawn.
+
+Open. The Minecraft mechanism that keeps a dead body from returning (kick and suppress restart, spectator that never receives control, or a server ban of that name) is a milestone 3 spike. The gate in the supervisor is milestone 1.
+
+## Autonomy without an assigned goal
+
+Agreed behavior. Milestone 1 has to find a compatible hook, because the current code will not loop with an empty prompt.
+
+Three different things:
+
+| Term | Required? | What it is |
+| --- | --- | --- |
+| Autonomous activity | Yes, whenever the life is `alive` and not operator-silenced | The existing self-prompt loop and the survival modes. This is how the inhabitant chooses a next action when nothing else is queued. |
+| Current intention | No | A short optional hint, usually from the morning brief. The planner may turn it into a plan. An empty intention does not stop the loop. |
+| Long-term ambition | No | A self-selected aim that may last many days. Milestone 7. The scenario never assigns one. An empty ambition does not stop the loop. |
+
+The survival experiment keeps using `settings.init_message` as its broad goal. A village scenario must not pass that string in, and must not write a different `init_message` into `settings.js`.
+
+Known dependency, to be handled inside milestone 1:
+
+- `SelfPrompter.start` returns without starting when both the argument and the stored prompt are empty (`src/agent/self_prompter.js`).
+- `Agent.start` only calls that after `resolveStartupGoal` finds a saved self-prompt, a process init message, or `settings.init_message` (`src/agent/agent.js`, `src/agent/startup_goal.js`).
+- `handleLoad` throws if the saved state is active and the prompt is empty.
+
+The scenario-level mechanism must start that same loop for a village inhabitant who has no intention and no ambition, must not persist the loop's preamble as their lifelong goal, and must leave the survival startup path byte-for-byte in behavior when no scenario is selected. Milestone 1 investigates the call chain and adds the smallest hook that satisfies those three constraints. The product rule is not an open question. The function to change is what the milestone is there to confirm.
+
+## Cognitive architecture
+
+Proposed. Same agent, two model roles, several stores. The day model is the profile's chat model. The dream model is a separate configurable client used only from the sleep path.
+
+```
+Day (qwen3:8b, configurable)
+  sees: backstory + stance + morning intention
+        + live stats, inventory, verified lessons, craft ledger
+        + a handful of pinned or relevant episodic lines
+        + the existing plan, command docs, and turn window
+  writes: actions and speech through the existing command loop
+  code writes: episodic events, ledger rows, verified lessons, plan progress
+
+Dream job (qwen3:14b, configurable), queued by a successful sleep, may finish after waking
+  reads: this inhabitant's admission snapshot, long-term bank, today's episodes,
+         craft ledger, plan outcomes, current relationships
+  may write, after code validation:
+         long-term social rows, a journal entry, a stance line,
+         one to three intentions for the planner
+  may not write: admission snapshot, verified lessons, ledger rows, inventory,
+                 another person's files, life state, death facts
+                 that were not already in this inhabitant's episodes
+```
+
+The dream input cap is about sixty short episodic lines plus the compact bank. Those sixty lines are not copied into the next day's action prompt. The day prompt receives the morning brief (about ten lines), the stance, the current intention when one exists, and the always-on factual blocks. An empty intention still leaves the autonomous loop running.
+
+### Memory stores
+
+| Store | Owner | In the day prompt? | Mutable by the dream model? |
+| --- | --- | --- | --- |
+| Identity snapshot | Runtime, written once at admission from the profile. Backstory, initial temperament, stable id, checksum, admission time. | Yes. The prompt reads this, not a later edit of the profile. | No. |
+| Backstory and initial temperament | Inside the snapshot. | Yes. About a dozen backstory facts. Temperament is the starting voice until a stance exists. | No. |
+| Relationships | Runtime. One private record per other person this inhabitant knows. Asymmetric. | Only the few relevant to the morning intention or a person in view. | May append an interpretation. May not invent an event that is not in the episodes. |
+| Episodic events | Runtime. Code-written, one row per event, stable id. | Pinned lines and a small relevant slice. | Read-only input. |
+| Long-term bank | Runtime. Cap around 40 rows, updated by id. | No. The morning brief is the extract. | May update or mark rows for forgetting. Code drops the lowest-priority stale rows and rejects rows that contradict verified facts. |
+| Morning brief and stance | Runtime. Replaced each successful dream. | Yes. | Yes, as the dream's validated output. |
+| Craft ledger | Runtime. One row per item, code-updated from verified outcomes. | Yes. About 15–25 lines. | No. |
+| Verified lessons | Existing `verified_lessons.json`. | Yes, through the existing known-facts block. | No. |
+| Live game state | Queried each turn. | Yes. Authoritative over every memory. | No. |
+| Conversation window and 500-character summary | Existing `memory.json` and `histories/`. | The turn window, yes. The summary is not the village long-term bank. | No. |
+| Journal | Runtime. Append-only private prose. | No, except a short "yesterday" extract if the brief includes it. | May append one entry per dream. |
+| Intentions | Runtime. Hints, not a new lifelong goal. | The active one, yes. | May propose. The existing planner still has to accept a feasible plan. |
+
+Episodic rows are the material the dream organizes. Code writes them when something durable happens: a verified craft, a conversation turn with a named person, a gift or theft the actor observed, a construction failure tied to a place, a death this inhabitant witnessed, arriving home. Code does not write a row for every pathing step.
+
+FIFO over one mixed sentence list is rejected. Craft rows update in place. Backstory rows never expire. Episodes roll off only after they have been considered by a dream or have aged out of the recent buffer; the histories archive still holds the raw transcript. Relationship rows are not deleted because a newer stranger spoke.
+
+### Factual versus subjective
+
+Agreed. This split is why the current summary made agents unreliable, and why the dream model is not allowed to "fix" recipes.
+
+- Factual, code-owned: item counts, recipe ingredients from `minecraft-data`, structured action outcomes, placed blocks the outcome verified, free inventory slots, lifecycle state, and the plot assignment recorded on the admission snapshot.
+- Subjective, model-owned after validation: what a conversation meant, whether someone is a friend, the journal, the morning intention, the stance line.
+
+If they disagree, the factual store is what the day prompt labels as current reality. The journal can say "I think the chest was stolen" only when an episode supports that the inhabitant found the chest changed. The journal cannot say the stone pickaxe recipe is different from the ledger.
+
+### Working memory
+
+Proposed. The day model's extra village block stays small because `qwen3:8b` is configured with `num_ctx` 8192 and the existing system prompt already carries command docs, a plan, inventory, and up to 15 turns. Budget for the village addition is a few hundred tokens: backstory, stance, one intention, morning brief, ledger, and a handful of episodes. Retrieval of older episodes is a dream-time and `!think` concern, not an every-action paste.
+
+Open. Whether that retrieval should reuse the existing embedding example selector (`ollama/embeddinggemma` on the current profiles) or stay keyword-and-pin only until measured. Milestone 4 can ship with pins and the morning brief and leave semantic retrieval as a later refinement.
+
+### Sleep and the dream queue
+
+Proposed for milestone 4. The trigger rule is agreed now so later work does not block on it.
+
+Successful sleep is the only default trigger. `goToBed` reaching `bot.isSleeping` records that a real sleep started. No sleep means no dream. Sunrise, a missed night, or lying down without the server accepting the bed does not enqueue one.
+
+The model call must not depend on the body staying asleep until inference returns. Waking, walking away, or a short sleep ending is normal. The job still completes.
+
+`runtime/scenarios/<scenario_id>/dream_queue.json` is the durable queue for that scenario:
+
+- One row per sleep that was accepted: inhabitant id, sleep id, status (`queued`, `running`, `applied`, `rejected`), and the snapshot checksum the job was built from.
+- Deduplicate on inhabitant id plus an unfinished status. A second sleep while a job is `queued` or `running` does not add another row.
+- Workers are serialized across the scenario, in the same spirit as reflection's `max_concurrent`.
+- Apply the result only if the row is still `running`, the checksum still matches the admission snapshot, and lifecycle is `alive` or `absent`. Do not apply onto `dead`. Do not apply twice. A failed validation leaves the previous morning brief and marks the row `rejected`.
+- The inhabitant may be `awake` while the row is `running`. Applying a result does not require them to be in bed.
+
+The dream reads only that mind's snapshot, bank, episodes (capped, on the order of sixty), ledger, plan outcome, and relationships. It is prompted in the first person. Output is structured. Code drops command syntax, inventory claims, and any death or relationship event with no episode id. Intentions are optional hints to the existing planner. They are not a new `self_prompt` essay and they are not required for the autonomous loop.
+
+If the dream model errors, yesterday's brief remains and the inhabitant keeps acting. Sleep deprivation, if it is ever built, may shrink retrieval. It must not rewrite the snapshot, episodes, lessons, ledger, or queue history into garbage. It is milestone 7, not part of the queue.
+
+### Personality
+
+Agreed. Personality is continuity of preference under new events.
+
+- The admission snapshot is the prior. Backstory facts are concrete and behavioral ("keeps a private chest", "dislikes being followed"), not a paragraph of traits the 8B model is asked to perform.
+- The evolving part is the relationship bank plus one stance line. The day model acts that line. It does not author a new personality.
+- Seed relationships are optional scenario content. A person may start as a stranger, an acquaintance, a friend, or someone with a differing opinion. Differing opinions are not required for a valid population.
+- The shared survival prompt is what made the current agents converge. The village scenario does not use that prompt. Distinct voices come from the snapshot when the author wrote them, and from later experience either way.
+- No profession field. An interest may appear in the backstory as a preference. It is not a job the planner is required to pursue.
+
+The survival planning prompt and `settings.init_message` stay in force for the survival scenario. A village scenario has no assigned ambition. Identity text comes from the snapshot. The autonomous-loop hook is the milestone 1 investigation above. Survival `settings.js` stays the default when no scenario is selected.
+
+## Knowledge, death, and evidence
+
+Agreed rules. The current code does not meet them yet.
+
+**Local knowledge.** An inhabitant learns by:
+
+- their own verified actions and the blocks and containers they personally open,
+- players and entities currently perceivable by the bot,
+- chat that actually reached them,
+- reading their own memory.
+
+They do not learn from another inhabitant's `memory.json`, journal, plan, or dream. They do not learn from the observer UI.
+
+Open and required before milestone 3 is finished: today's multi-agent path ignores the public Mineflayer chat listener when other agents exist (`agent.js`) and routes talk through MindServer and `Conversation`. That path has no distance check. The simulation must define which messages are audible and must not treat a server-wide death broadcast or a MindServer fan-out as something every mind knows. Server `showDeathMessages` and the chat pipeline both need a decision.
+
+**Death.** Implemented behavior is respawn-and-continue. Agreed behavior is permadeath of that life:
+
+- The life record stores when and where the body died, and the last public evidence (dropped items at that position, if the server drops them).
+- The process supervisor does not start them again.
+- No system observation is injected into other agents saying that this person died.
+- Another inhabitant can record a death episode only through their own perception or through conversation that itself came from someone who had an episode.
+- A later disconnect of a living inhabitant still uses the absent state and the existing restart-is-not-a-goal rule.
+
+**Resources.** Homes, beds, food, tools, and paths are placed in the world before or at scenario start, by an operator-controlled provisioning step in milestone 2. Agents are not asked to bootstrap that village with `buildPlane`. After a house has been provisioned once, chests are ordinary containers. Food can be eaten. Tools can break. Restart, death, and absence do not refill them. Vacant plots are not stocked by the agent loop. How the blocks are placed is an open milestone 2 choice; the plot list is the contract.
+
+## Observer
+
+Proposed. Extend the existing MindServer rather than standing up a second control plane, unless a spike shows the UI cannot host a read-only life view. The observer may list inhabitants and open, per person: journal, relationships, recent episodes, current intention, plan status, lifecycle, and activity. Controls that already exist (stop, start, restart) remain operator actions and must use the same death gate as the supervisor. Start or restart on a dead life is refused.
+
+The inhabitant prompt path has no tool that reads this view.
+
+## Safety boundaries
+
+Agreed, and already true of the gameplay stack:
+
+- No inhabitant command runs server admin actions.
+- Generated JavaScript stays disabled.
+- Construction cannot place command blocks, barriers, or other forbidden blocks (see `FORBIDDEN` in `construction.js`).
+- Dream output is data filed by code, never code executed by the agent.
+- Operator commands stay `operatorOnly`.
+
+## Open technical decisions
+
+Collected here so implementation does not pretend they are settled.
+
+Decided, and no longer open: runtime root `runtime/scenarios/<scenario_id>/`; survival names are rejected; plots own home assignment; admission snapshot plus checksum; dead is terminal across every start path; no sleep means no dream; the dream queue outlives the bed; no assigned ambition still runs the autonomous loop.
+
+Still open. None of these block milestone 1. The autonomy hook's call site is milestone 1's investigation, and the required behavior is already fixed.
+
+1. Permadeath body in a live server: how the Minecraft session ends. The supervisor gate is not open. Milestone 3.
+2. Audible range and death-message leakage through public chat and MindServer. Milestone 3.
+3. Physical death evidence (item drops, a marker, an empty bed) and who is close enough to observe it. Milestone 3. The house is not that evidence by being emptied; emptying is forbidden.
+4. How milestone 2 places blocks (operator-built save, structure files, or a one-shot operator tool). Coordinates in `village.json` are the contract either way. Agents never receive that tool.
+5. Dream output JSON in detail, the timeout, and the exact error string when `qwen3:14b` is missing. The queue, deduplication, checksum check, and "keep yesterday's brief" rule are decided. Milestone 4.
+6. Semantic retrieval of old episodes versus pins only.
+7. Whether temperament later gains a small code-owned preference record. Milestone 7. Until then, prose facts and a stance line.
+8. Whether any container is designated public. Private chests are ordinary containers the owner can open; taking from one needs no special theft system if the game already allows the open. Which containers are private is the plot's chest, decided. Extra shared chests are optional scenario content.
+9. Dashboard inside MindServer versus a read-only addition. Preference: extend MindServer. Milestone 5.
