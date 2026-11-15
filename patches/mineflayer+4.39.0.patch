@@ -1,7 +1,84 @@
+diff --git a/node_modules/mineflayer/lib/plugins/craft.js b/node_modules/mineflayer/lib/plugins/craft.js
+index fb2766a..284ee7e 100644
+--- a/node_modules/mineflayer/lib/plugins/craft.js
++++ b/node_modules/mineflayer/lib/plugins/craft.js
+@@ -20,10 +20,11 @@ function inject (bot) {
+         await craftOnce(recipe, craftingTable)
+       }
+ 
++      await bot._syncWindow(windowCraftingTable || bot.inventory)
++
+       if (windowCraftingTable) {
+         // The last put-away click is unconfirmed; closing on a wrong model
+         // leaves items the server never placed.
+-        await bot._syncWindow(windowCraftingTable)
+         await bot.closeWindow(windowCraftingTable)
+         windowCraftingTable = undefined
+       }
+@@ -32,7 +33,7 @@ function inject (bot) {
+         bot.closeWindow(windowCraftingTable)
+         windowCraftingTable = undefined
+       }
+-      throw new Error(err)
++      throw err
+     }
+   }
+ 
+diff --git a/node_modules/mineflayer/lib/plugins/digging.js b/node_modules/mineflayer/lib/plugins/digging.js
+index 5ae5552..2d334ca 100644
+--- a/node_modules/mineflayer/lib/plugins/digging.js
++++ b/node_modules/mineflayer/lib/plugins/digging.js
+@@ -31,6 +31,17 @@ function inject (bot) {
+ 
+     bot.targetDigFace = 1 // Default (top)
+ 
++    // stopDigging() is only installed after lookAt returns. An interrupt
++    // during that look used to be ignored, and look() itself waits for a
++    // movement packet that death and a stationary bot may never send.
++    const stopDiggingBeforeLook = bot.stopDigging
++    let abortedDuringLook = false
++    bot.stopDigging = () => {
++      abortedDuringLook = true
++      stopDiggingBeforeLook()
++    }
++
++    try {
+     if (forceLook !== 'ignore') {
+       if (digFace?.x || digFace?.y || digFace?.z) {
+         // Determine the block face the bot should mine
+@@ -121,6 +132,12 @@ function inject (bot) {
+         await bot.lookAt(block.position.offset(0.5, 0.5, 0.5), forceLook)
+       }
+     }
++      if (abortedDuringLook) throw new Error('Digging aborted')
++    } catch (err) {
++      bot.stopDigging = stopDiggingBeforeLook
++      throw err
++    }
++    bot.stopDigging = stopDiggingBeforeLook
+ 
+     // In vanilla the client will cancel digging the current block once the other block is at the crosshair.
+     // Todo: don't wait until lookAt is at middle of the block, but at the edge of it.
+diff --git a/node_modules/mineflayer/lib/plugins/fishing.js b/node_modules/mineflayer/lib/plugins/fishing.js
+index 325be12..ba4e494 100644
+--- a/node_modules/mineflayer/lib/plugins/fishing.js
++++ b/node_modules/mineflayer/lib/plugins/fishing.js
+@@ -58,4 +58,10 @@ function inject (bot) {
+   }
+ 
+   bot.fish = fish
++  bot.stopFishing = () => {
++    if (fishingTask.done) return
++    bot.activateItem()
++    fishingTask.cancel(new Error('Fishing cancelled'))
++    lastBobber = null
++  }
+ }
 diff --git a/node_modules/mineflayer/lib/plugins/inventory.js b/node_modules/mineflayer/lib/plugins/inventory.js
+index bab0eef..43163ce 100644
 --- a/node_modules/mineflayer/lib/plugins/inventory.js
 +++ b/node_modules/mineflayer/lib/plugins/inventory.js
-@@ -478,6 +478,14 @@
+@@ -478,6 +478,14 @@ function inject (bot, { hideErrors }) {
      // crafting area, including picking up the result (which consumes the
      // ingredients). Waiting for that resync on result clicks too keeps
      // follow-up clicks and close_window from racing ahead of the craft.
@@ -16,42 +93,3 @@ diff --git a/node_modules/mineflayer/lib/plugins/inventory.js b/node_modules/min
      if (window.type === 'minecraft:inventory') {
        if (slot >= 0 && slot <= 4) {
          await once(bot.inventory, 'updateSlot:0')
-diff --git a/node_modules/mineflayer/lib/plugins/craft.js b/node_modules/mineflayer/lib/plugins/craft.js
---- a/node_modules/mineflayer/lib/plugins/craft.js
-+++ b/node_modules/mineflayer/lib/plugins/craft.js
-@@ -20,10 +20,11 @@
-         await craftOnce(recipe, craftingTable)
-       }
- 
-+      await bot._syncWindow(windowCraftingTable || bot.inventory)
-+
-       if (windowCraftingTable) {
-         // The last put-away click is unconfirmed; closing on a wrong model
-         // leaves items the server never placed.
--        await bot._syncWindow(windowCraftingTable)
-         await bot.closeWindow(windowCraftingTable)
-         windowCraftingTable = undefined
-       }
-@@ -32,7 +33,7 @@
-         bot.closeWindow(windowCraftingTable)
-         windowCraftingTable = undefined
-       }
--      throw new Error(err)
-+      throw err
-     }
-   }
- 
-diff --git a/node_modules/mineflayer/lib/plugins/fishing.js b/node_modules/mineflayer/lib/plugins/fishing.js
---- a/node_modules/mineflayer/lib/plugins/fishing.js
-+++ b/node_modules/mineflayer/lib/plugins/fishing.js
-@@ -58,4 +58,10 @@
-   }
- 
-   bot.fish = fish
-+  bot.stopFishing = () => {
-+    if (fishingTask.done) return
-+    bot.activateItem()
-+    fishingTask.cancel(new Error('Fishing cancelled'))
-+    lastBobber = null
-+  }
- }

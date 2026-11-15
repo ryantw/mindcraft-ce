@@ -3,10 +3,111 @@ import * as mc from '../../utils/mcdata.js';
 import { getCommandDocs } from './index.js';
 import convoManager from '../conversation.js';
 import { checkLevelBlueprint, checkBlueprint } from '../tasks/construction_tasks.js';
-import { load } from 'cheerio';
+import { searchMinecraftWiki } from './wiki_search.js';
+import { reflect } from '../reasoning.js';
+import { inventoryCapabilities } from '../mechanics.js';
 
 const pad = (str) => {
     return '\n' + str + '\n';
+}
+
+const NORMAL_STORAGE_SLOTS = 36;
+
+function equipmentSlot(bot, destination, fallback) {
+    try {
+        return bot.getEquipmentDestSlot?.(destination) ?? fallback;
+    } catch {
+        return fallback;
+    }
+}
+
+function durability(item) {
+    const maximum = Number(item?.maxDurability);
+    const used = Number(item?.durabilityUsed);
+    if (!Number.isFinite(maximum) || maximum <= 0 || !Number.isFinite(used)) return '';
+    const remaining = Math.max(0, maximum - used);
+    return ` (${remaining}/${maximum} durability remaining)`;
+}
+
+function normalStorage(bot) {
+    const slots = bot?.inventory?.slots || [];
+    const configuredStart = Number(bot?.inventory?.inventoryStart);
+    const start = Number.isInteger(configuredStart) ? configuredStart : 9;
+    const end = Math.min(start + NORMAL_STORAGE_SLOTS, slots.length);
+    let occupied = 0;
+    for (let index = start; index < end; index++) {
+        if (slots[index]) occupied++;
+    }
+    return {
+        occupied,
+        free: Math.max(0, NORMAL_STORAGE_SLOTS - occupied),
+        start,
+        end,
+    };
+}
+
+function formatInventory(agent) {
+    const bot = agent.bot;
+    const inventory = world.getInventoryCounts(bot);
+    let res = 'CURRENT INVENTORY (live)';
+    const entries = Object.entries(inventory).filter(([, count]) => count > 0);
+    if (entries.length === 0) {
+        res += '\n- Item totals: Nothing';
+    } else {
+        res += '\nITEM TOTALS';
+        for (const [item, count] of entries) res += `\n- ${item}: ${count}`;
+    }
+    if (entries.length > 0 && bot.game?.gameMode === 'creative') {
+        res += '\n(You have infinite items in creative mode. You do not need to gather resources!!)';
+    }
+
+    const storage = normalStorage(bot);
+    const status = storage.free === 0 ? 'FULL' : storage.free <= 2 ? 'NEARLY FULL' : 'AVAILABLE';
+    res += `\nSTORAGE: ${storage.occupied}/${NORMAL_STORAGE_SLOTS} normal slots occupied; ${storage.free} free (${status}).`;
+
+    const slots = bot.inventory.slots || [];
+    const equipment = {
+        Held: bot.heldItem || null,
+        Offhand: slots[equipmentSlot(bot, 'off-hand', 45)] || null,
+        Head: slots[equipmentSlot(bot, 'head', 5)] || null,
+        Torso: slots[equipmentSlot(bot, 'torso', 6)] || null,
+        Legs: slots[equipmentSlot(bot, 'legs', 7)] || null,
+        Feet: slots[equipmentSlot(bot, 'feet', 8)] || null,
+    };
+    res += '\nEQUIPMENT';
+    for (const [label, item] of Object.entries(equipment)) {
+        res += `\n- ${label}: ${item ? item.name + durability(item) : 'Nothing'}`;
+    }
+
+    const equippedSlots = new Set([
+        bot.heldItem?.slot,
+        equipmentSlot(bot, 'off-hand', 45),
+        equipmentSlot(bot, 'head', 5),
+        equipmentSlot(bot, 'torso', 6),
+        equipmentSlot(bot, 'legs', 7),
+        equipmentSlot(bot, 'feet', 8),
+    ].filter(Number.isInteger));
+    const durableItems = [];
+    for (let index = storage.start; index < storage.end; index++) {
+        const item = slots[index];
+        if (!item || equippedSlots.has(index) || !durability(item)) continue;
+        durableItems.push(`${item.name}${durability(item)}`);
+    }
+    if (durableItems.length > 0) {
+        res += '\nOTHER DURABLE TOOLS/EQUIPMENT';
+        for (const item of durableItems.slice(0, 8)) res += `\n- ${item}`;
+    }
+
+    if (storage.free <= 2) {
+        res += '\nInventory is nearly full; consider using or storing existing resources before acquiring more.';
+    }
+
+    const capabilities = inventoryCapabilities(bot, inventory, 4);
+    if (capabilities.length > 0) {
+        res += '\nVERIFIED CURRENT CAPABILITIES';
+        for (const capability of capabilities) res += `\n- ${capability}`;
+    }
+    return pad(res);
 }
 
 // queries are commands that just return strings and don't affect anything in the world
@@ -49,7 +150,7 @@ export const queryList = [
             let action = agent.actions.currentActionLabel;
             if (agent.isIdle())
                 action = 'Idle';
-            res += `\- Current Action: ${action}`;
+            res += `\n- Current Action: ${action}`;
 
 
             let players = world.getNearbyPlayerNames(bot);
@@ -65,39 +166,9 @@ export const queryList = [
     },
     {
         name: "!inventory",
-        description: "Get your bot's inventory.",
+        description: "Get live item totals, normal storage capacity, held/offhand equipment, armor, durability, and a short verified capability summary.",
         perform: function (agent) {
-            let bot = agent.bot;
-            let inventory = world.getInventoryCounts(bot);
-            let res = 'INVENTORY';
-            for (const item in inventory) {
-                if (inventory[item] && inventory[item] > 0)
-                    res += `\n- ${item}: ${inventory[item]}`;
-            }
-            if (res === 'INVENTORY') {
-                res += ': Nothing';
-            }
-            else if (agent.bot.game.gameMode === 'creative') {
-                res += '\n(You have infinite items in creative mode. You do not need to gather resources!!)';
-            }
-
-            let helmet = bot.inventory.slots[5];
-            let chestplate = bot.inventory.slots[6];
-            let leggings = bot.inventory.slots[7];
-            let boots = bot.inventory.slots[8];
-            res += '\nWEARING: ';
-            if (helmet)
-                res += `\nHead: ${helmet.name}`;
-            if (chestplate)
-                res += `\nTorso: ${chestplate.name}`;
-            if (leggings)
-                res += `\nLegs: ${leggings.name}`;
-            if (boots)
-                res += `\nFeet: ${boots.name}`;
-            if (!helmet && !chestplate && !leggings && !boots)
-                res += 'Nothing';
-
-            return pad(res);
+            return formatInventory(agent);
         }
     },
     {
@@ -268,7 +339,7 @@ export const queryList = [
     },
     {
         name: '!getCraftingPlan',
-        description: "Provides a comprehensive crafting plan for a specified item. This includes a breakdown of required ingredients, the exact quantities needed, and an analysis of missing ingredients or extra items needed based on the bot's current inventory.",
+        description: "Provides an inventory-aware crafting plan for a specified item, including quantities, valid ingredient alternatives, missing ingredients, and required workstations.",
         params: {
             targetItem: { 
                 type: 'string', 
@@ -310,31 +381,37 @@ export const queryList = [
     },
     {
         name: '!searchWiki',
-        description: 'Search the Minecraft Wiki for the given query.',
+        description: 'Look up a short, specific Minecraft topic on the Minecraft Wiki. Names such as "oak planks", "wooden pickaxe", or "river" work best. Returns a brief summary of the closest articles, not a full page. Long questions and invented topics match poorly or not at all.',
         params: {
-            'query': { type: 'string', description: 'The query to search for.' }
+            'query': { type: 'string', description: 'A short Minecraft topic, item, or block name. Examples: oak_planks, wooden_pickaxe, river.' }
         },
         perform: async function (agent, query) {
-            const url = `https://minecraft.wiki/w/${query}`
-            try {
-                const response = await fetch(url);
-                if (response.status === 404) {
-                  return `${query} was not found on the Minecraft Wiki. Try adjusting your search term.`;
-                }
-                const html = await response.text();
-                const $ = load(html);
-            
-                const parserOutput = $("div.mw-parser-output");
-                
-                parserOutput.find("table.navbox").remove();
+            return searchMinecraftWiki(agent, query);
+        }
+    },
+    {
+        name: '!think',
+        description: `Reflect on a problem using your reasoning abilities.
+Use this when you are stuck, an action has failed,
+you are unsure what to do next, or you need help
+understanding Minecraft mechanics.
 
-                const divContent = parserOutput.text();
-            
-                return divContent.trim();
-              } catch (error) {
-                console.error("Error fetching or parsing HTML:", error);
-                return `The following error occurred: ${error}`
-              }
+Provide your current problem as a question.
+You will receive advice based on your current
+situation, inventory, and recent experiences.
+
+After receiving advice, take an appropriate action.
+Do not repeatedly think about the same problem
+without acting.
+
+Examples: !think   or   !think("I cannot reach the acacia logs. What should I do?")
+Both forms use parentheses when a question is included. Do not write !think "question".`,
+        params: {
+            'question': { type: 'string', description: 'Optional. The problem to investigate. Omit it to reflect on your current situation.', optional: true }
+        },
+        perform: async function (agent, question) {
+            // The agent chose this command, with or without a question.
+            return reflect(agent, question, { source: 'voluntary' });
         }
     },
     {

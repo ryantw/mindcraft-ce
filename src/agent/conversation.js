@@ -1,10 +1,64 @@
 import settings from './settings.js';
-import { containsCommand } from './commands/index.js';
+import { containsCommand, stripUnsharedCommands } from './commands/index.js';
 import { sendBotChatToServer } from './mindserver_proxy.js';
 
 let agent;
 let agent_names = [];
 let agents_in_game = [];
+
+const REPETITIVE_TURN_LIMIT = 4;
+const PROGRESS_HISTORY_LIMIT = 4;
+const CONVERSATION_COOLDOWN_MS = 30000;
+const SELF_PROMPT_RESUME_DELAY_MS = 5000;
+const CONVERSATIONAL_FILLER = new Set([
+    'a', 'about', 'also', 'an', 'and', 'anything', 'are', 'at', 'but', 'currently',
+    'do', 'doing', 'for', 'fun', 'here', 'how', 'i', 'im', 'is', 'it', 'its',
+    'just', 'looking', 'maybe', 'much', 'new', 'no', 'nothing', 'now', 'okay',
+    'or', 'pretty', 'really', 'so', 'some', 'something', 'still', 'stuff', 'sure',
+    'the', 'there', 'to', 'too', 'up', 'we', 'were', 'what', 'yes', 'you',
+    'youre', 'yeah',
+]);
+
+export function normalizeConversationMessage(message) {
+    if (typeof message !== 'string')
+        return '';
+    return message
+        .toLocaleLowerCase()
+        .normalize('NFKC')
+        .replace(/[’']/gu, '')
+        .replace(/[^\p{L}\p{N}]+/gu, ' ')
+        .trim();
+}
+
+export function areMessagesSubstantiallySimilar(first, second) {
+    const normalizedFirst = normalizeConversationMessage(first);
+    const normalizedSecond = normalizeConversationMessage(second);
+    if (!normalizedFirst || !normalizedSecond)
+        return false;
+    if (normalizedFirst === normalizedSecond)
+        return true;
+
+    const firstTokens = new Set(normalizedFirst.split(' '));
+    const secondTokens = new Set(normalizedSecond.split(' '));
+    if (Math.min(firstTokens.size, secondTokens.size) < 4)
+        return false;
+
+    let intersection = 0;
+    for (const token of firstTokens) {
+        if (secondTokens.has(token))
+            intersection++;
+    }
+    const union = firstTokens.size + secondTokens.size - intersection;
+    const lengthRatio = Math.min(firstTokens.size, secondTokens.size)
+        / Math.max(firstTokens.size, secondTokens.size);
+    const meaningfulChanges = [...firstTokens, ...secondTokens].filter(token =>
+        !CONVERSATIONAL_FILLER.has(token)
+        && !(firstTokens.has(token) && secondTokens.has(token))
+    );
+    return meaningfulChanges.length === 0
+        && lengthRatio >= 0.7
+        && intersection / union >= 0.6;
+}
 
 function runDetached(operation, context) {
     Promise.resolve(operation).catch(error => {
@@ -21,6 +75,10 @@ export class Conversation {
         this.in_queue = [];
         this.inMessageTimer = null;
         this.responseGeneration = 0;
+        this.progressHistory = { incoming: [], outgoing: [] };
+        this.repetitiveTurns = 0;
+        this.repetitiveDirections = new Set();
+        this.cooldownUntil = 0;
     }
 
     clearTimer() {
@@ -37,6 +95,7 @@ export class Conversation {
         this.active = false;
         this.ignore_until_start = false;
         this.in_queue = [];
+        this.resetProgress();
     }
 
     end() {
@@ -54,10 +113,52 @@ export class Conversation {
 
         if (agent.last_sender === this.name)
             agent.last_sender = null;
+
+        this.resetProgress();
     }
 
     queue(message) {
         this.in_queue.push(message);
+    }
+
+    resetProgress() {
+        this.progressHistory = { incoming: [], outgoing: [] };
+        this.repetitiveTurns = 0;
+        this.repetitiveDirections = new Set();
+    }
+
+    observeProgress(direction, message) {
+        if (containsCommand(message)) {
+            this.resetProgress();
+            return false;
+        }
+
+        const history = this.progressHistory[direction];
+        const repeated = history.some(previous =>
+            areMessagesSubstantiallySimilar(previous, message)
+        );
+        history.push(message);
+        if (history.length > PROGRESS_HISTORY_LIMIT)
+            history.shift();
+
+        if (!repeated) {
+            this.repetitiveTurns = 0;
+            this.repetitiveDirections.clear();
+            return false;
+        }
+
+        this.repetitiveTurns++;
+        this.repetitiveDirections.add(direction);
+        return this.repetitiveTurns >= REPETITIVE_TURN_LIMIT
+            && this.repetitiveDirections.size === 2;
+    }
+
+    startCooldown(duration = CONVERSATION_COOLDOWN_MS) {
+        this.cooldownUntil = Math.max(this.cooldownUntil, Date.now() + duration);
+    }
+
+    cooldownRemaining() {
+        return Math.max(0, this.cooldownUntil - Date.now());
     }
 }
 
@@ -69,6 +170,8 @@ class ConversationManager {
         this.awaiting_response = false;
         this.connection_timeout = null;
         this.wait_time_limit = WAIT_TIME_START;
+        this.cooldown_ms = CONVERSATION_COOLDOWN_MS;
+        this.resume_delay_ms = SELF_PROMPT_RESUME_DELAY_MS;
     }
 
     initAgent(a) {
@@ -146,6 +249,11 @@ class ConversationManager {
 
     async startConversation(send_to, message) {
         const convo = this._getConvo(send_to);
+        const cooldownRemaining = convo.cooldownRemaining();
+        if (cooldownRemaining > 0) {
+            console.log(`[${agent.name}] Conversation with ${send_to} not restarted: progress-watchdog cooldown has ${Math.ceil(cooldownRemaining / 1000)}s remaining.`);
+            return false;
+        }
         convo.reset();
         const generation = convo.responseGeneration;
 
@@ -158,6 +266,7 @@ class ConversationManager {
         this.activeConversation = convo;
         this._startMonitor();
         this.sendToBot(send_to, message, true, false);
+        return true;
     }
 
     startConversationFromOtherBot(name) {
@@ -174,6 +283,8 @@ class ConversationManager {
         }
         const convo = this._getConvo(send_to);
 
+        message = stripUnsharedCommands(message);
+        if (!message) return;
         if (settings.chat_bot_messages && open_chat)
             runDetached(agent.openChat(`(To ${send_to}) ${message}`), `Failed to mirror message to ${send_to}`);
 
@@ -182,6 +293,10 @@ class ConversationManager {
         convo.active = true;
 
         const end = message.includes('!endConversation');
+        if (!end && convo.observeProgress('outgoing', message)) {
+            this._endRepetitiveConversation(send_to);
+            return;
+        }
         const json = {
             'message': message,
             start,
@@ -194,6 +309,13 @@ class ConversationManager {
 
     async receiveFromBot(sender, received) {
         const convo = this._getConvo(sender);
+
+        if (received.start && convo.cooldownRemaining() > 0) {
+            const cooldownRemaining = convo.cooldownRemaining();
+            console.log(`[${agent.name}] Declined conversation restart from ${sender}: progress-watchdog cooldown has ${Math.ceil(cooldownRemaining / 1000)}s remaining.`);
+            this._sendWatchdogEnd(sender, cooldownRemaining);
+            return;
+        }
 
         if (convo.ignore_until_start && !received.start)
             return;
@@ -215,6 +337,19 @@ class ConversationManager {
         const generation = convo.responseGeneration;
         convo.queue(received);
 
+        if (received.conversation_watchdog?.reason === 'repetitive') {
+            const cooldown = Number(received.conversation_watchdog.cooldown_ms);
+            convo.startCooldown(Number.isFinite(cooldown) ? cooldown : this.cooldown_ms);
+            const reason = 'peer progress watchdog detected a repetitive conversation';
+            console.warn(`[${agent.name}] Conversation with ${sender} ended by peer progress watchdog: repetitive conversation without new information.`);
+            this.endConversation(sender, reason);
+            return;
+        }
+        else if (!received.end && convo.observeProgress('incoming', received.message)) {
+            this._endRepetitiveConversation(sender);
+            return;
+        }
+
         // responding to conversation takes priority over self prompting
         if (agent.self_prompter.isActive()){
             await agent.self_prompter.pause();
@@ -222,7 +357,7 @@ class ConversationManager {
 
         if (convo.responseGeneration !== generation)
             return;
-        await _scheduleProcessInMessage(sender, received, convo, generation);
+        _scheduleProcessInMessage(sender, received, convo, generation);
     }
 
     responseScheduledFor(sender) {
@@ -255,7 +390,7 @@ class ConversationManager {
         return Object.values(this.convos).some(c => c.active);
     }
 
-    endConversation(sender) {
+    endConversation(sender, reason=null) {
         const convo = this.convos[sender];
         if (!convo)
             return;
@@ -265,7 +400,15 @@ class ConversationManager {
             this._stopMonitor();
             this.activeConversation = null;
             if (agent.self_prompter.isPaused() && !this.inConversation()) {
-                runDetached(_resumeSelfPrompter(), 'Failed to resume self-prompting after conversation end');
+                if (reason)
+                    console.log(`[${agent.name}] Autonomous self-prompting resume scheduled after conversation with ${sender} ended (${reason}).`);
+                runDetached(
+                    _resumeSelfPrompter(sender, reason, this.resume_delay_ms),
+                    'Failed to resume self-prompting after conversation end'
+                );
+            }
+            else if (reason) {
+                console.log(`[${agent.name}] Autonomous self-prompting was not resumed after conversation with ${sender}: it was not paused or another conversation is active.`);
             }
         }
     }
@@ -275,8 +418,35 @@ class ConversationManager {
             this.endConversation(sender);
         }
         if (agent.self_prompter.isPaused()) {
-            runDetached(_resumeSelfPrompter(), 'Failed to resume self-prompting after ending conversations');
+            runDetached(
+                _resumeSelfPrompter(null, null, this.resume_delay_ms),
+                'Failed to resume self-prompting after ending conversations'
+            );
         }
+    }
+
+    _sendWatchdogEnd(sender, cooldown=this.cooldown_ms) {
+        sendBotChatToServer(sender, {
+            message: `Let's pause here and return to our other goals. !endConversation("${sender}")`,
+            start: false,
+            end: true,
+            conversation_watchdog: {
+                reason: 'repetitive',
+                cooldown_ms: Math.max(0, Math.ceil(cooldown)),
+            },
+        });
+    }
+
+    _endRepetitiveConversation(sender) {
+        const convo = this._getConvo(sender);
+        if (!convo.active)
+            return;
+
+        convo.startCooldown(this.cooldown_ms);
+        const reason = `${convo.repetitiveTurns} consecutive repetitive turns across both agents without new information`;
+        console.warn(`[${agent.name}] Conversation with ${sender} ended by progress watchdog: ${reason}. Cooldown ${this.cooldown_ms}ms.`);
+        this._sendWatchdogEnd(sender, this.cooldown_ms);
+        this.endConversation(sender, reason);
     }
 
     forceEndCurrentConversation() {
@@ -303,45 +473,36 @@ The logic is as follows:
 const talkOverActions = ['stay', 'followPlayer', 'mode:']; // all mode actions
 const fastDelay = 200;
 const longDelay = 5000;
-async function _scheduleProcessInMessage(sender, received, convo, generation) {
+function _scheduleProcessInMessage(sender, received, convo, generation) {
     let otherAgentBusy = containsCommand(received.message);
 
     const scheduleResponse = (delay) => {
         if (convo.responseGeneration !== generation || convo.ignore_until_start)
             return;
         convo.inMessageTimer = setTimeout(() => {
-            if (convo.responseGeneration === generation)
-                _processInMessageQueue(sender);
+            if (convo.responseGeneration !== generation)
+                return;
+            const busy = !agent.isIdle()
+                && !talkOverActions.some(action => agent.actions.currentActionLabel.includes(action));
+            if (busy) {
+                scheduleResponse(1000);
+                return;
+            }
+            _processInMessageQueue(sender);
         }, delay);
     };
 
-    if (!agent.isIdle() && otherAgentBusy) {
-        // both are busy
-        let canTalkOver = talkOverActions.some(a => agent.actions.currentActionLabel.includes(a));
-        if (canTalkOver)
-            scheduleResponse(fastDelay);
-        // otherwise don't respond
+    const canTalkOver = !agent.isIdle() && talkOverActions.some(a => agent.actions.currentActionLabel.includes(a));
+    if (!agent.isIdle() && !canTalkOver) {
+        // The queued message is answered after the current physical action
+        // finishes. Replying now would start a new command and cancel it.
+        scheduleResponse(1000);
     }
     else if (otherAgentBusy)
         // other bot is busy but I'm not
         scheduleResponse(longDelay);
-    else if (!agent.isIdle()) {
-        // I'm busy but other bot isn't
-        let canTalkOver = talkOverActions.some(a => agent.actions.currentActionLabel.includes(a));
-        if (canTalkOver) {
-            scheduleResponse(fastDelay);
-        }
-        else {
-            let shouldRespond = await agent.prompter.promptShouldRespondToBot(received.message);
-            console.log(`${agent.name} decided to ${shouldRespond?'respond':'not respond'} to ${sender}`);
-            if (shouldRespond)
-                scheduleResponse(fastDelay);
-        }
-    }
-    else {
-        // neither are busy
+    else
         scheduleResponse(fastDelay);
-    }
 }
 
 function _processInMessageQueue(name) {
@@ -371,7 +532,12 @@ function _handleFullInMessage(sender, received) {
 
     let message = _tagMessage(received.message);
     if (received.end) {
-        convoManager.endConversation(sender);
+        const reason = received.conversation_watchdog?.reason === 'repetitive'
+            ? 'peer progress watchdog detected a repetitive conversation'
+            : null;
+        if (reason)
+            console.warn(`[${agent.name}] Conversation with ${sender} ended by peer progress watchdog: repetitive conversation without new information.`);
+        convoManager.endConversation(sender, reason);
         message = `Conversation with ${sender} ended with message: "${message}"`;
         sender = 'system'; // bot will respond to system instead of the other bot
     }
@@ -385,9 +551,14 @@ function _tagMessage(message) {
     return "(FROM OTHER BOT)"+message;
 }
 
-async function _resumeSelfPrompter() {
-    await new Promise(resolve => setTimeout(resolve, 5000));
+async function _resumeSelfPrompter(sender, reason, delay) {
+    await new Promise(resolve => setTimeout(resolve, delay));
     if (agent.self_prompter.isPaused() && !convoManager.inConversation()) {
         agent.self_prompter.start();
+        const outcome = agent.self_prompter.isActive() ? 'resumed' : 'did not resume';
+        console.log(`[${agent.name}] Autonomous self-prompting ${outcome}${sender ? ` after conversation with ${sender}` : ''}${reason ? ` (${reason})` : ''}.`);
+    }
+    else if (reason) {
+        console.log(`[${agent.name}] Autonomous self-prompting did not resume after conversation with ${sender}: state changed or another conversation started.`);
     }
 }

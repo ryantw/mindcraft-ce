@@ -4,7 +4,7 @@ import { VisionInterpreter } from './vision/vision_interpreter.js';
 import { Prompter } from '../models/prompter.js';
 import { initModes } from './modes.js';
 import { initBot } from '../utils/mcdata.js';
-import { containsCommand, commandExists, executeCommand, truncCommandMessage, isAction, blacklistCommands } from './commands/index.js';
+import { containsCommand, commandExists, executeCommand, truncCommandMessage, isAction, blacklistCommands, stripUnsharedCommands, describeAttempt, formatCommandSignature } from './commands/index.js';
 import { ActionManager } from './action_manager.js';
 import { NPCContoller } from './npc/controller.js';
 import { MemoryBank } from './memory_bank.js';
@@ -17,9 +17,18 @@ import settings from './settings.js';
 import { Task } from './tasks/tasks.js';
 import { speak } from './speak.js';
 import { log, validateNameFormat, handleDisconnection } from './connection_handler.js';
+import { resolveStartupGoal, usableGoal } from './startup_goal.js';
+import { PlanManager } from './plan_manager.js';
+import { blockingRepeatCount, isCommandRejection, updateRepeatCounts } from './action_outcome.js';
+import { maybeAutoReflect, recordCommandResult } from './reflection_triggers.js';
+import { reflectionState } from './reasoning.js';
+import { resumePausedAutonomy, systemObservation } from './system_events.js';
+import { sanitizeIncomingPeerMessage, sanitizeOutgoingChat } from './chat_hygiene.js';
 
 export class Agent {
     async start(load_mem=false, init_message=null, count_id=0) {
+        this.ready = false;
+        this._deferredMessages = [];
         this.last_sender = null;
         this.count_id = count_id;
         this._disconnectHandled = false;
@@ -44,6 +53,7 @@ export class Agent {
         this.npc = new NPCContoller(this);
         this.memory_bank = new MemoryBank();
         this.self_prompter = new SelfPrompter(this);
+        this.plan_manager = new PlanManager(this);
         convoManager.initAgent(this);
         await this.prompter.initExamples();
 
@@ -195,12 +205,35 @@ export class Agent {
         });
         this.bot.autoEat.enableAuto();
 
-        if (save_data?.self_prompt) {
-            if (init_message) {
-                this.history.add('system', init_message);
-            }
-            await this.self_prompter.handleLoad(save_data.self_prompt, save_data.self_prompting_state);
+        this.ready = true;
+        const savedGoal = usableGoal(save_data?.self_prompt);
+        const startup = resolveStartupGoal({
+            saved: save_data?.self_prompt,
+            initMessage: init_message,
+            directive: settings.init_message,
+        });
+        if (startup.notice) {
+            this.history.add('system', startup.notice);
         }
+        if (savedGoal) {
+            const resumablePause = save_data.self_prompting_state === 2
+                && !(save_data.last_sender && convoManager.otherAgentInGame(save_data.last_sender));
+            await this.self_prompter.handleLoad(savedGoal, save_data.self_prompting_state, { resumePaused: resumablePause });
+        } else if (startup.goal) {
+            if (startup.replacedSavedGoal || startup.notice) {
+                console.log(`[${this.name}] Restored the autonomous goal. A restart notice is not a goal.`);
+            }
+            this.history.add('system', startup.goal);
+            this.self_prompter.start(startup.goal);
+            if (startup.replacedSavedGoal || startup.notice) {
+                this.history.save();
+            }
+        }
+        const deferred = this._deferredMessages.splice(0);
+        for (const item of deferred) {
+            await this.handleMessage(item.source, item.message, item.max_responses);
+        }
+        serverProxy.flushPending();
         if (save_data?.last_sender) {
             this.last_sender = save_data.last_sender;
             if (convoManager.otherAgentInGame(this.last_sender)) {
@@ -211,11 +244,11 @@ export class Agent {
                 convoManager.receiveFromBot(this.last_sender, msg_package);
             }
         }
-        else if (init_message) {
-            await this.handleMessage('system', init_message, 2);
-        }
-        else {
-            this.openChat("Hello world! I am "+this.name);
+        // else if (init_message) {
+        //     await this.handleMessage('system', init_message, 2);
+        // }
+        else if (!startup.goal) {
+            this.openChat("Hello world! I am " + this.name);
         }
     }
 
@@ -233,10 +266,53 @@ export class Agent {
 
     requestInterrupt() {
         this.bot.interrupt_code = true;
-        this.bot.stopDigging();
-        this.bot.collectBlock.cancelTask();
-        this.bot.pathfinder.stop();
-        this.bot.pvp.stop();
+
+        // dig() waits for look() before it installs stopDigging(). look()
+        // itself waits for a movement packet, which a stationary or dead bot
+        // does not send. Force look finishes that wait without physics.
+        try {
+            if (typeof this.bot.look === 'function') {
+                const yaw = this.bot.entity?.yaw ?? 0;
+                const pitch = this.bot.entity?.pitch ?? 0;
+                this.bot.look(yaw, pitch, true).catch(err => {
+                    console.warn(`[${this.name}] Failed to unblock look:`, err);
+                });
+            }
+        } catch (err) {
+            console.warn(`[${this.name}] Failed to unblock look:`, err);
+        }
+
+        try {
+            this.bot.stopDigging();
+        } catch (err) {
+            console.warn(`[${this.name}] Failed to stop digging:`, err);
+        }
+
+        // Only allow one pending block collection cancellation.
+        if (this.bot.collectBlock && !this._collectCancelPromise) {
+            this._collectCancelPromise = this.bot.collectBlock
+                .cancelTask()
+                .catch(err => {
+                    console.warn(
+                        `[${this.name}] Block collection cancellation failed:`,
+                        err
+                    );
+                })
+                .finally(() => {
+                    this._collectCancelPromise = null;
+                });
+        }
+
+        try {
+            this.bot.pathfinder.stop();
+        } catch (err) {
+            console.warn(`[${this.name}] Failed to stop pathfinder:`, err);
+        }
+        try {
+            this.bot.pvp.stop();
+        } catch (err) {
+            console.warn(`[${this.name}] Failed to stop combat:`, err);
+        }
     }
 
     clearBotLogs() {
@@ -253,6 +329,12 @@ export class Agent {
     }
 
     async handleMessage(source, message, max_responses=null) {
+        if (!this.ready) {
+            this._deferredMessages = this._deferredMessages || [];
+            this._deferredMessages.push({ source, message, max_responses });
+            console.log(`[${this.name || 'agent'}] Deferred message from ${source} until initialization completes.`);
+            return false;
+        }
         await this.checkTaskDone();
         if (!source || !message) {
             console.warn('Received empty message from', source);
@@ -269,6 +351,7 @@ export class Agent {
 
         const self_prompt = source === 'system' || source === this.name;
         const from_other_bot = convoManager.isOtherAgent(source);
+        const contextKind = self_prompt ? 'autonomous' : from_other_bot ? 'peer' : 'human';
 
         if (!self_prompt && !from_other_bot) { // from user, check for forced commands
             const user_command_name = containsCommand(message);
@@ -283,15 +366,29 @@ export class Agent {
                     // add the preceding message to the history to give context for newAction
                     this.history.add(source, message);
                 }
-                let execute_res = await executeCommand(this, message);
+                let execute_res = await executeCommand(this, message, { operator: true });
                 if (execute_res) 
                     this.routeResponse(source, execute_res);
                 return true;
             }
         }
 
-        if (from_other_bot)
+        if (from_other_bot) {
             this.last_sender = source;
+            const shared = stripUnsharedCommands(message);
+            if (shared !== message.trim()) {
+                console.log(`[${this.name}] Removed private or administrative commands from ${source}'s message.`);
+            }
+            if (!shared) return false;
+            // Another agent's words are its claims, never this agent's own
+            // observations: drop result-shaped text and action commands.
+            const peer = sanitizeIncomingPeerMessage(shared);
+            if (peer.changed) {
+                console.log(`[${this.name}] Removed result text or action commands from ${source}'s message.`);
+            }
+            if (!peer.text) return false;
+            message = peer.text;
+        }
 
         // Now translate the message
         message = await handleEnglishTranslation(message);
@@ -305,7 +402,7 @@ export class Agent {
             if (behavior_log.length > MAX_LOG) {
                 behavior_log = '...' + behavior_log.substring(behavior_log.length - MAX_LOG);
             }
-            behavior_log = 'Recent behaviors log: \n' + behavior_log;
+            behavior_log = systemObservation('SURVIVAL MODE ACTIVITY', 'Recent behaviors:\n' + behavior_log);
             await this.history.add('system', behavior_log);
         }
 
@@ -313,12 +410,24 @@ export class Agent {
         await this.history.add(source, message);
         this.history.save();
 
+        // The self-prompt loop requests plans itself. While it is paused (for
+        // example inside a long peer conversation) an agent with no usable plan
+        // asks for one in the background so planning does not depend on the
+        // conversation ending. Shares ensurePlan's single request and backoff.
+        if (!self_prompt && !this.self_prompter.isActive()) {
+            try {
+                this.plan_manager?.ensurePlanInBackground?.();
+            } catch (error) {
+                console.warn(`[${this.name}] Could not start background planning: ${error.message}`);
+            }
+        }
+
         if (!self_prompt && this.self_prompter.isActive()) // message is from user during self-prompting
             max_responses = 1; // force only respond to this message, then let self-prompting take over
         for (let i=0; i<max_responses; i++) {
             if (checkInterrupt()) break;
             let history = this.history.getHistory();
-            let res = await this.prompter.promptConvo(history);
+            let res = await this.prompter.promptConvo(history, { contextKind });
 
             console.log(`${this.name} full response to ${source}: ""${res}""`);
 
@@ -334,20 +443,79 @@ export class Agent {
                 this.history.add(this.name, res);
                 
                 if (!commandExists(command_name)) {
-                    this.history.add('system', `Command ${command_name} does not exist.`);
-                    console.warn('Agent hallucinated command:', command_name)
-                    continue;
+                    console.warn('Agent hallucinated command:', command_name);
                 }
 
                 if (checkInterrupt()) break;
+
+                // Repetition is tracked by behavior, not only by the exact
+                // command string. digDown(800) and digDown(801) that hit the
+                // same drop, or buildLine and buildPlane of the same blocks,
+                // are one unresolved attempt.
+                const commandKey = res
+                    .substring(res.indexOf(command_name))
+                    .trim();
+                const attempt = describeAttempt(res);
+
+                this.repeatWatchdog ??= { counts: new Map() };
+
+                const watchdog = this.repeatWatchdog;
+
+                if (blockingRepeatCount(watchdog.counts, {
+                    commandKey,
+                    commandName: command_name,
+                    action: attempt.action,
+                    params: attempt.params,
+                    bot: this.bot,
+                    parsedOk: attempt.parsedOk,
+                    missingArguments: attempt.missingArguments,
+                }) >= 3) {
+                    const prior = this.actions.getLastBlocked?.() || this.actions.getLastOutcome?.();
+                    const why = prior?.reason?.message || prior?.reason || 'it is not making progress';
+                    const signature = formatCommandSignature(command_name);
+                    const warning =
+                        `REPEATED ACTION BLOCKED: ${commandKey}. ${why} ` +
+                        `${signature ? `Correct form: ${signature}. ` : ''}` +
+                        `Do not repeat this action. Choose a different action, move, look around, or reconsider the goal.`;
+
+                    console.warn(`[${this.name}] ${warning}`);
+                    await this.history.add('system', warning);
+                    this.history.save();
+                    this.actions.repeatSuppressed = true;
+
+                    try {
+                        const problemKey = recordCommandResult(this, {
+                            commandName: command_name,
+                            commandKey,
+                            failed: true,
+                            isAction: isAction(command_name) || !commandExists(command_name),
+                            resultText: warning,
+                            behaviorKey: prior?.behaviorKey || attempt.behaviorHint || null,
+                        });
+                        // Suppression is the hard stop. Do not spend another
+                        // reflection on a problem that was already explained.
+                        const alreadyReflected = problemKey && reflectionState(this).reflected.has(problemKey);
+                        const reflection = alreadyReflected ? null : await maybeAutoReflect(this, problemKey);
+                        if (reflection) await this.history.add('system', reflection);
+                    } catch (error) {
+                        console.warn(`[${this.name}] Automatic reflection error: ${error.message}`);
+                    }
+
+                    // Not a completed action. The self-prompt loop backs off
+                    // instead of treating the refusal as progress.
+                    used_command = false;
+                    break;
+                }
+
                 this.self_prompter.handleUserPromptedCmd(self_prompt, isAction(command_name));
 
                 if (settings.show_command_syntax === "full") {
-                    this.routeResponse(source, res);
+                    const spoken = this._speakable(res);
+                    if (spoken) this.routeResponse(source, spoken);
                 }
                 else if (settings.show_command_syntax === "shortened") {
                     // show only "used !commandname"
-                    let pre_message = res.substring(0, res.indexOf(command_name)).trim();
+                    let pre_message = this._speakable(res.substring(0, res.indexOf(command_name)).trim());
                     let chat_message = `*used ${command_name.substring(1)}*`;
                     if (pre_message.length > 0)
                         chat_message = `${pre_message}  ${chat_message}`;
@@ -355,7 +523,7 @@ export class Agent {
                 }
                 else {
                     // no command at all
-                    let pre_message = res.substring(0, res.indexOf(command_name)).trim();
+                    let pre_message = this._speakable(res.substring(0, res.indexOf(command_name)).trim());
                     if (pre_message.trim().length > 0)
                         this.routeResponse(source, pre_message);
                 }
@@ -365,14 +533,111 @@ export class Agent {
                 console.log('Agent executed:', command_name, 'and got:', execute_res);
                 used_command = true;
 
+                // Record the actual outcome of this command.
+                const outcome = String(execute_res || '');
+                const structuredOutcome = this.actions.getLastOutcome?.() || null;
+
+                const blockedAttempt = structuredOutcome ? null : this.actions.getLastBlocked?.() || null;
+                // An error string is a failed decision. Zero verified progress
+                // with a reason is also a failure, even when status is success
+                // because the requested blocks were already there.
+                const failed = structuredOutcome
+                    ? structuredOutcome.status === 'failure' || (!structuredOutcome.relevantProgress && Boolean(structuredOutcome.reason))
+                    : !outcome.trim() || isCommandRejection(outcome) ||
+                        /\b(error|invalid|failed|cannot|could not|unable to)\b/i.test(outcome) ||
+                        /unchanged blocking condition|don't have|do not have|not enough|no resources|collected 0|no .* nearby to collect|took to long|could not reach|path not found|pathfinding stopped|reserved for the human operator/i.test(outcome);
+
+                // A search that finds the same block is not progress, and a
+                // different failed command must not erase this count.
+                const isSearch =
+                    command_name === '!searchForBlock' ||
+                    command_name === '!searchForEntity';
+
+                const isThink = command_name === '!think';
+                const thought = isThink && /Private reflection \(not shared in chat\)/.test(outcome);
+                // Reflections never reset other counts. Verified relevant progress
+                // alone clears a structured command's count; incidental inventory
+                // gains do not. See updateRepeatCounts.
+                const behaviorKey = structuredOutcome?.behaviorKey || blockedAttempt?.behaviorKey || (!attempt.parsedOk ? attempt.behaviorHint : null);
+                updateRepeatCounts(watchdog.counts, commandKey, {
+                    structuredOutcome, failed, isSearch, isThink, thought, behaviorKey,
+                });
+
+                if (structuredOutcome?.retry?.reasonableWithoutStateChange === false) {
+                    await this.history.add(
+                        'system',
+                        `Do not immediately repeat ${commandKey}: ${structuredOutcome.reason?.message || 'the blocking condition is unchanged'} ` +
+                        `${structuredOutcome.reason?.prerequisites?.join(' ') || 'Change the relevant world or inventory state first.'}`
+                    );
+                }
+
+                if (structuredOutcome) {
+                    const planUpdate = this.plan_manager.observeOutcome(structuredOutcome);
+                    if (planUpdate.advanced) {
+                        const message = planUpdate.completed
+                            ? `Persistent objective completed from verified game-state evidence: ${this.plan_manager.getCurrentPlan()?.objective}`
+                            : `Persistent plan advanced from verified evidence. Current step: ${planUpdate.next?.description}`;
+                        await this.history.add('system', message);
+                    } else if (planUpdate.blocked) {
+                        await this.history.add(
+                            'system',
+                            'The active plan step is blocked by an unchanged observed condition. Reconsider the approach before another routine action.'
+                        );
+                    }
+                }
+
                 if (execute_res)
-                    this.history.add('system', execute_res);
-                else
+                    await this.history.add('system', systemObservation('ACTION RESULT', execute_res));
+
+                if ((watchdog.counts.get(behaviorKey || commandKey) || 0) === 3) {
+                    await this.history.add(
+                        'system',
+                        `Your last three attempts at ${commandKey} ` +
+                        `have been repetitive or unsuccessful. ` +
+                        `Reassess your situation and choose a ` +
+                        `different action.`
+                    );
+
+                    console.warn(
+                        `[${this.name}] Watchdog: repeated action detected: ${commandKey}`
+                    );
+                }
+
+                // Evidence-based automatic reflection. The next decision sees
+                // the private advice; nothing is announced or shared.
+                try {
+                    const problemKey = recordCommandResult(this, {
+                        commandName: command_name,
+                        commandKey,
+                        failed,
+                        isAction: isAction(command_name) || !commandExists(command_name),
+                        resultText: outcome,
+                        behaviorKey,
+                    });
+                    const reflection = await maybeAutoReflect(this, problemKey);
+                    if (reflection) await this.history.add('system', reflection);
+                } catch (error) {
+                    console.warn(`[${this.name}] Automatic reflection error: ${error.message}`);
+                }
+
+                if (!execute_res)
                     break;
             }
             else { // conversation response
-                this.history.add(this.name, res);
-                this.routeResponse(source, res);
+                const speech = sanitizeOutgoingChat(res);
+                if (speech.changed) {
+                    this.chat_hygiene = this.chat_hygiene || { sanitized: 0, suppressed: 0 };
+                    this.chat_hygiene.sanitized++;
+                    console.warn(`[${this.name}] Removed action-result text from an outgoing reply${speech.suppressed ? ' (nothing left to say; not sent)' : ''}.`);
+                }
+                if (speech.suppressed) {
+                    this.chat_hygiene.suppressed++;
+                    // Private note so the next turn does not repeat the pattern.
+                    await this.history.add('system', 'Your last reply only repeated an action result. Results are private observations; do not restate them in chat. Say something in your own words or take an action.');
+                    break;
+                }
+                this.history.add(this.name, speech.text);
+                this.routeResponse(source, speech.text);
                 break;
             }
             
@@ -382,18 +647,35 @@ export class Agent {
         return used_command;
     }
 
+    /**
+     * Speech derived from a model reply, minus any restated action results.
+     * Returns '' when nothing speakable remains.
+     */
+    _speakable(text) {
+        const speech = sanitizeOutgoingChat(text);
+        if (speech.changed) {
+            this.chat_hygiene = this.chat_hygiene || { sanitized: 0, suppressed: 0 };
+            this.chat_hygiene.sanitized++;
+            console.warn(`[${this.name}] Removed action-result text from an outgoing message.`);
+        }
+        return speech.text;
+    }
+
     async routeResponse(to_player, message) {
         if (this.shut_up) return;
         let self_prompt = to_player === 'system' || to_player === this.name;
-        if (self_prompt && this.last_sender) {
-            // this is for when the agent is prompted by system while still in conversation
-            // so it can respond to events like death but be routed back to the last sender
+        if (self_prompt && this.last_sender && !containsCommand(message)) {
+            // A spoken event such as death can rejoin the conversation.
+            // A command must not: sending it makes the other agent reply,
+            // and that reply was cancelling the action that just started.
             to_player = this.last_sender;
         }
 
         if (convoManager.isOtherAgent(to_player) && convoManager.inConversation(to_player)) {
-            // if we're in an ongoing conversation with the other bot, send the response to it
-            convoManager.sendToBot(to_player, message);
+            // Administrative and private reflection commands stay local.
+            const shared = stripUnsharedCommands(message);
+            if (shared)
+                convoManager.sendToBot(to_player, shared);
         }
         else {
             // otherwise, use open chat
@@ -465,7 +747,9 @@ export class Agent {
         });
         this.bot.on('death', () => {
             this.actions.cancelResume();
-            this.actions.stop();
+            Promise.resolve(this.actions.stop()).finally(() => {
+                resumePausedAutonomy(this, 'death', convoManager.inConversation());
+            });
         });
         this.bot.on('kicked', (reason) => {
             if (!this._disconnectHandled) {
@@ -483,7 +767,10 @@ export class Agent {
                     death_pos_text = `x: ${death_pos.x.toFixed(2)}, y: ${death_pos.y.toFixed(2)}, z: ${death_pos.z.toFixed(2)}`;
                 }
                 let dimention = this.bot.game.dimension;
-                this.handleMessage('system', `You died at position ${death_pos_text || "unknown"} in the ${dimention} dimension with the final message: '${message}'. Your place of death is saved as 'last_death_position' if you want to return. Previous actions were stopped and you have respawned.`);
+                this.handleMessage('system', systemObservation(
+                    'DEATH AND RESPAWN',
+                    `You died at position ${death_pos_text || "unknown"} in the ${dimention} dimension with the final message: '${message}'. Your place of death is saved as 'last_death_position' if you want to return. The action that was running ended automatically because you died; this does not request !stop. You have respawned. Continue your existing objective with an appropriate recovery action.`
+                ));
             }
         });
         this.bot.on('idle', () => {
@@ -537,15 +824,13 @@ export class Agent {
         process.exit(code);
     }
     async checkTaskDone() {
-        if (this.task.data) {
-            let res = this.task.isDone();
-            if (res) {
-                await this.history.add('system', `Task ended with score : ${res.score}`);
-                await this.history.save();
-                // await new Promise(resolve => setTimeout(resolve, 3000)); // Wait 3 second for save to complete
-                console.log('Task finished:', res.message);
-                this.killAll();
-            }
+        if (!this.task?.data) return;
+        let res = this.task.isDone();
+        if (res) {
+            await this.history.add('system', `Task ended with score : ${res.score}`);
+            await this.history.save();
+            console.log('Task finished:', res.message);
+            this.killAll();
         }
     }
 

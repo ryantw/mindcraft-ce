@@ -196,6 +196,50 @@ export function getNearestEntityWhere(bot, predicate, maxDistance=16) {
 }
 
 
+// Items the agent deliberately discarded must not be re-collected by the
+// idle item_collecting mode or by pickupNearbyItems. Suppression is limited to
+// the discarded item type, to the discard location, and to a finite time.
+export const DISCARD_SUPPRESS_RADIUS = 8;
+export const DISCARD_SUPPRESS_MS = 10 * 60 * 1000;
+
+export function recordDiscard(bot, itemName, position, now=Date.now()) {
+    if (!bot || !itemName || !position) return;
+    const zones = (bot.discardedItemZones || []).filter(zone => zone.expiresAt > now);
+    zones.push({
+        item: itemName,
+        position: position.clone ? position.clone() : { ...position },
+        expiresAt: now + DISCARD_SUPPRESS_MS,
+    });
+    bot.discardedItemZones = zones.slice(-20);
+}
+
+export function isDiscardedItemEntity(bot, entity, now=Date.now()) {
+    const zones = (bot?.discardedItemZones || []).filter(zone => zone.expiresAt > now);
+    if (zones.length === 0 || !entity?.position) return false;
+    let name = null;
+    try {
+        name = entity.getDroppedItem?.()?.name || null;
+    }
+    catch (_error) {
+        name = null;
+    }
+    return zones.some(zone => {
+        if (name && name !== zone.item) return false;
+        const dx = entity.position.x - zone.position.x;
+        const dy = entity.position.y - zone.position.y;
+        const dz = entity.position.z - zone.position.z;
+        return Math.sqrt(dx * dx + dy * dy + dz * dz) <= DISCARD_SUPPRESS_RADIUS;
+    });
+}
+
+export function getNearestCollectableItem(bot, maxDistance=8) {
+    return getNearestEntityWhere(
+        bot,
+        entity => entity.name === 'item' && !isDiscardedItemEntity(bot, entity),
+        maxDistance
+    );
+}
+
 export function getNearbyPlayers(bot, maxDistance) {
     if (maxDistance == null) maxDistance = 16;
     let players = [];

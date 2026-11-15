@@ -9,9 +9,52 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { selectAPI, createModel } from './_model_map.js';
+import convoManager from '../agent/conversation.js';
+import { attributeTurnsForSummary, durableMemoryView, isTransientMemoryTurn, stripCommandSyntax } from '../agent/chat_hygiene.js';
+import { formatKnownFacts } from '../agent/lessons.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+function parseJsonObject(text) {
+    const cleaned = String(text || '')
+        .replace(/<think>[\s\S]*?<\/think>/gi, '')
+        .replace(/```(?:json)?/gi, '')
+        .replace(/```/g, '')
+        .trim();
+    const start = cleaned.indexOf('{');
+    if (start === -1) return null;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let index = start; index < cleaned.length; index++) {
+        const character = cleaned[index];
+        if (inString) {
+            if (escaped) escaped = false;
+            else if (character === '\\') escaped = true;
+            else if (character === '"') inString = false;
+            continue;
+        }
+        if (character === '"') inString = true;
+        else if (character === '{') depth++;
+        else if (character === '}') {
+            depth--;
+            if (depth === 0) {
+                try {
+                    return JSON.parse(cleaned.slice(start, index + 1));
+                } catch {
+                    return null;
+                }
+            }
+        }
+    }
+    return null;
+}
+
+export function shouldUseConversationExamples(contextKind='human') {
+    if (contextKind === 'human') return true;
+    return settings.allow_retrieved_examples_in_non_human_contexts !== false;
+}
 
 export class Prompter {
     constructor(agent, profile) {
@@ -162,10 +205,16 @@ export class Prompter {
                 await this.skill_libary.getRelevantSkillDocs(code_task_content, settings.relevant_docs_count)
             );
         }
-        if (prompt.includes('$EXAMPLES') && examples !== null)
-            prompt = prompt.replaceAll('$EXAMPLES', await examples.createExampleMessage(messages));
+        if (prompt.includes('$EXAMPLES')) {
+            const exampleText = examples !== null
+                ? await examples.createExampleMessage(messages)
+                : '';
+            prompt = prompt.replaceAll('$EXAMPLES', exampleText);
+        }
+        if (prompt.includes('$KNOWN_FACTS'))
+            prompt = prompt.replaceAll('$KNOWN_FACTS', formatKnownFacts(this.agent));
         if (prompt.includes('$MEMORY'))
-            prompt = prompt.replaceAll('$MEMORY', this.agent.history.memory);
+            prompt = prompt.replaceAll('$MEMORY', durableMemoryView(this.agent.history.memory));
         if (prompt.includes('$TO_SUMMARIZE'))
             prompt = prompt.replaceAll('$TO_SUMMARIZE', stringifyTurns(to_summarize));
         if (prompt.includes('$CONVO'))
@@ -174,6 +223,15 @@ export class Prompter {
             // if active or paused, show the current goal
             let self_prompt = !this.agent.self_prompter.isStopped() ? `YOUR CURRENT ASSIGNED GOAL: "${this.agent.self_prompter.prompt}"\n` : '';
             prompt = prompt.replaceAll('$SELF_PROMPT', self_prompt);
+        }
+        if (prompt.includes('$PLAN')) {
+            // Nothing is injected while persistent planning is disabled.
+            let plan = '';
+            if (this.agent.plan_manager?.enabled) {
+                plan = (this.agent.plan_manager.formatForPrompt() ||
+                    'PERSISTENT PLAN\nNo plan has been selected yet.') + '\n';
+            }
+            prompt = prompt.replaceAll('$PLAN', plan);
         }
         if (prompt.includes('$LAST_GOALS')) {
             let goal_text = '';
@@ -211,7 +269,7 @@ export class Prompter {
         this.last_prompt_time = Date.now();
     }
 
-    async promptConvo(messages) {
+    async promptConvo(messages, { contextKind = 'human' } = {}) {
         this.most_recent_msg_time = Date.now();
         let current_msg_time = this.most_recent_msg_time;
 
@@ -221,12 +279,24 @@ export class Prompter {
                 return '';
             }
 
+            const contextMessages = contextKind === 'human'
+                ? messages
+                : messages.filter(turn => !isTransientMemoryTurn(turn));
             let prompt = this.profile.conversing;
-            prompt = await this.replaceStrings(prompt, messages, this.convo_examples);
+            const useExamples = shouldUseConversationExamples(contextKind);
+            if (!useExamples) {
+                this.loggedExamplePolicies ??= new Set();
+                if (!this.loggedExamplePolicies.has(contextKind)) {
+                    this.loggedExamplePolicies.add(contextKind);
+                    console.log(`[${this.agent.name}] Retrieved conversation examples disabled for ${contextKind} context.`);
+                }
+            }
+            const examples = useExamples ? this.convo_examples : null;
+            prompt = await this.replaceStrings(prompt, contextMessages, examples);
             let generation;
 
             try {
-                generation = await this.chat_model.sendRequest(messages, prompt);
+                generation = await this.chat_model.sendRequest(contextMessages, prompt);
                 if (typeof generation !== 'string') {
                     console.error('Error: Generated response is not a string', generation);
                     throw new Error('Generated response is not a string');
@@ -280,14 +350,61 @@ export class Prompter {
     async promptMemSaving(to_summarize) {
         await this.checkCooldown();
         let prompt = this.profile.saving_memory;
-        prompt = await this.replaceStrings(prompt, null, null, to_summarize);
+        // Label other agents' words so they are not recorded as this agent's
+        // own experience, and drop command syntax from what gets summarized.
+        const attributed = attributeTurnsForSummary(to_summarize, this.agent.name, name => convoManager.isOtherAgent(name));
+        prompt = await this.replaceStrings(prompt, null, null, attributed);
         let resp = await this.chat_model.sendRequest([], prompt);
         await this._saveLog(prompt, to_summarize, resp, 'memSaving');
         if (resp?.includes('</think>')) {
             const [_, afterThink] = resp.split('</think>')
             resp = afterThink;
         }
-        return resp;
+        // Memory holds durable lessons, never command invocations.
+        return typeof resp === 'string' ? stripCommandSyntax(resp) : resp;
+    }
+
+    async promptPlanning(reason, previousPlan=null, feedback=null) {
+        if (!this.agent.plan_manager?.enabled) return null;
+        await this.checkCooldown();
+        let prompt = this.profile.planning;
+        const previous = this.agent.plan_manager?.formatForPrompt?.() ||
+            (previousPlan ? JSON.stringify(previousPlan, null, 2) : 'No previous plan.');
+        prompt = prompt
+            .replaceAll('$PLAN_REASON', String(reason || 'no_active_plan'))
+            .replaceAll('$PREVIOUS_PLAN', previous);
+        // Live, code-built context (real command signatures, construction
+        // limits, resource-sufficiency rules, rejection feedback). Appended
+        // when a profile's planning prompt predates the $PLAN_CONTEXT slot.
+        const context = this.agent.plan_manager?.planningContext?.(feedback) || '';
+        prompt = prompt.includes('$PLAN_CONTEXT')
+            ? prompt.replaceAll('$PLAN_CONTEXT', context)
+            : `${prompt}\n\n${context}`;
+        prompt = await this.replaceStrings(prompt, []);
+        let response;
+        if (typeof this.chat_model.complete === 'function') {
+            // One-shot call with room for a multi-step JSON plan (the chat
+            // profile caps output at 512 tokens, which truncates build plans)
+            // and a timeout that tolerates five agents sharing one Ollama.
+            const result = await this.chat_model.complete(
+                'Choose your objective and plan now. Return only the JSON object.',
+                prompt,
+                { think: false, keep_alive: -1, timeout_ms: 120000, max_predict: 1024, options: { num_predict: 1024 } }
+            );
+            response = result?.content ?? '';
+            if (result?.done_reason === 'length') {
+                console.warn(`[${this.agent.name}] Planning response hit the token limit and may be truncated.`);
+            }
+        } else {
+            response = await this.chat_model.sendRequest([], prompt);
+        }
+        await this._saveLog(prompt, [], response, 'planning');
+        const proposal = parseJsonObject(response);
+        if (!proposal || typeof proposal.objective !== 'string' || !Array.isArray(proposal.steps)) {
+            console.warn(`[${this.agent.name}] Could not parse a valid persistent plan:`, response);
+            return null;
+        }
+        return proposal;
     }
 
     async promptShouldRespondToBot(new_message) {

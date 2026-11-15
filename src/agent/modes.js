@@ -3,6 +3,8 @@ import * as world from './library/world.js';
 import * as mc from '../utils/mcdata.js';
 import settings from './settings.js'
 import convoManager from './conversation.js';
+import { noteStuckRecovery } from './reflection_triggers.js';
+import { systemObservation } from './system_events.js';
 
 async function say(agent, message) {
     agent.bot.modes.behavior_log += message + '\n';
@@ -110,6 +112,17 @@ const modes_list = [
             if (cur_dig_block && !this.prev_dig_block) {
                 this.prev_dig_block = cur_dig_block;
             }
+            // Standing still while a route is being calculated is not a wedge.
+            // Interrupting it makes the agent say it is stuck, then immediately
+            // start the same collection again.
+            const pathfinder = bot.pathfinder;
+            const searchingForPath = pathfinder?.goal && !pathfinder.isMoving() && !pathfinder.isMining() && !cur_dig_block;
+            if (searchingForPath) {
+                this.prev_location = bot.entity.position.clone();
+                this.stuck_time = 0;
+                this.last_time = Date.now();
+                return;
+            }
             if (this.prev_location && this.prev_location.distanceTo(bot.entity.position) < this.distance && cur_dig_block == this.prev_dig_block) {
                 this.stuck_time += (Date.now() - this.last_time) / 1000;
             }
@@ -122,6 +135,11 @@ const modes_list = [
             if (this.stuck_time > max_stuck_time) {
                 say(agent, 'I\'m stuck!');
                 this.stuck_time = 0;
+                try {
+                    noteStuckRecovery(agent, agent.actions?.currentActionLabel);
+                } catch (error) {
+                    console.warn(`[${agent.name}] Could not note stuck recovery: ${error.message}`);
+                }
                 execute(this, agent, async () => {
                     const crashTimeout = setTimeout(() => { agent.cleanKill("Got stuck and couldn't get unstuck") }, 10000);
                     await skills.moveAway(bot, 5);
@@ -196,7 +214,7 @@ const modes_list = [
         prev_item: null,
         noticed_at: -1,
         update: async function (agent) {
-            let item = world.getNearestEntityWhere(agent.bot, entity => entity.name === 'item', 8);
+            let item = world.getNearestCollectableItem(agent.bot, 8);
             let empty_inv_slots = agent.bot.inventory.emptySlotCount();
             if (item && item !== this.prev_item && await world.isClearPath(agent.bot, item) && empty_inv_slots > 1) {
                 if (this.noticed_at === -1) {
@@ -322,10 +340,18 @@ async function execute(mode, agent, func, timeout=-1) {
 
     if (should_reprompt) {
         // auto prompt to respond to the interruption
-        let role = convoManager.inConversation() ? agent.last_sender : 'system';
         let logs = agent.bot.modes.flushBehaviorLog();
-        agent.handleMessage(role, `(AUTO MESSAGE)Your previous action '${interrupted_action}' was interrupted by ${mode.name}.
-        Your behavior log: ${logs}\nRespond accordingly.`);
+        if (mode.name === 'unstuck') {
+            agent.handleMessage('system', systemObservation('AUTOMATIC RECOVERY', `Your previous action '${interrupted_action}' made no progress. Do not repeat that command. Do not say that you are stuck or free. Choose a different action.`));
+        }
+        else {
+            // This is the agent's own event: keep it attributed to 'system'.
+            // Passing the conversation partner as the source made it look like
+            // a message from that peer. A text-only reply still rejoins the
+            // conversation through routeResponse's last_sender handling.
+            agent.handleMessage('system', systemObservation('SURVIVAL MODE INTERRUPTION', `Your previous action '${interrupted_action}' was interrupted by ${mode.name}. This describes what happened; it is not a request to stop again.
+        Your behavior log: ${logs}\nChoose the next action in light of your existing objective and current safety.`));
+        }
     }
 }
 

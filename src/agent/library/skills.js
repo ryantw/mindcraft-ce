@@ -3,12 +3,100 @@ import * as world from "./world.js";
 import pf from 'mineflayer-pathfinder';
 import Vec3 from 'vec3';
 import settings from "../../../settings.js";
+import { formatIngredients, formatRecipeAlternatives } from '../../utils/crafting.js';
+import { canStoreCollectionTarget, collectionExpectedItems } from '../action_outcome.js';
 
 const blockPlaceDelay = settings.block_place_delay == null ? 0 : settings.block_place_delay;
 const useDelay = blockPlaceDelay > 0;
 
 export function log(bot, message) {
     bot.output += message + '\n';
+}
+
+export function inventoryChangeSummary(before, after, relevantItems=[]) {
+    const changedItems = new Set();
+    for (const name of new Set([...Object.keys(before), ...Object.keys(after)])) {
+        if ((before[name] || 0) !== (after[name] || 0))
+            changedItems.add(name);
+    }
+    for (const name of relevantItems) {
+        if (name && name !== 'hand' && name !== 'nothing')
+            changedItems.add(name);
+    }
+
+    const names = [...changedItems].sort();
+    if (names.length === 0) {
+        const beforeTotal = Object.values(before).reduce((total, count) => total + count, 0);
+        const afterTotal = Object.values(after).reduce((total, count) => total + count, 0);
+        return `Inventory before -> after: no changes (total items ${beforeTotal} -> ${afterTotal}).`;
+    }
+
+    const changes = names.map(name => {
+        const beforeCount = before[name] || 0;
+        const afterCount = after[name] || 0;
+        const delta = afterCount - beforeCount;
+        const suffix = delta === 0 ? 'no change' : `${delta > 0 ? '+' : ''}${delta}`;
+        return `${name} ${beforeCount} -> ${afterCount} (${suffix})`;
+    });
+    return `Inventory before -> after: ${changes.join(', ')}.`;
+}
+
+function inventoryGains(before, after) {
+    return Object.keys(after).filter(name => (after[name] || 0) > (before[name] || 0));
+}
+
+export function collectionResultFeedback(blockType, collected, inventoryBefore, inventoryAfter, expectedItems=null) {
+    const allGains = inventoryGains(inventoryBefore, inventoryAfter);
+    // With expected drops known, only they confirm collection. Other gains are
+    // incidental (cobblestone mined on the way to ore) and reported separately.
+    const targeted = Array.isArray(expectedItems) && expectedItems.length > 0;
+    const gains = targeted ? allGains.filter(name => expectedItems.includes(name)) : allGains;
+    const incidental = targeted ? allGains.filter(name => !expectedItems.includes(name)) : [];
+    const inventory = inventoryChangeSummary(inventoryBefore, inventoryAfter, [blockType, ...(targeted ? expectedItems : [])]);
+    const incidentalNote = incidental.length > 0
+        ? ` Incidental gains (not collection progress): ${incidental.map(name => `${name} +${inventoryAfter[name] - (inventoryBefore[name] || 0)}`).join(', ')}.`
+        : '';
+    if (collected > 0 && gains.length > 0) {
+        return {
+            success: true,
+            message: `Harvested ${collected} ${blockType} block${collected === 1 ? '' : 's'} and confirmed collected items. ${inventory}${incidentalNote}`,
+        };
+    }
+    if (collected > 0) {
+        const expectedNote = targeted ? ` (expected: ${expectedItems.join(', ')})` : '';
+        return {
+            success: false,
+            message: `Finished ${collected} ${blockType} block collection action${collected === 1 ? '' : 's'}, but no collected items were confirmed in inventory${expectedNote}. ${inventory}${incidentalNote}`,
+        };
+    }
+    return {
+        success: false,
+        message: `No ${blockType} blocks were harvested and no items were collected. ${inventory}${incidentalNote}`,
+    };
+}
+
+async function waitForInteractionInventory(bot) {
+    if (typeof bot.waitForTicks === 'function')
+        await bot.waitForTicks(2);
+    else
+        await new Promise(resolve => setTimeout(resolve, 0));
+}
+
+function logInteractionResult(bot, toolName, targetName, inventoryBefore, blockTarget=false) {
+    const inventoryAfter = world.getInventoryCounts(bot);
+    const gains = inventoryGains(inventoryBefore, inventoryAfter);
+    const target = targetName === 'nothing' ? 'no target' : targetName;
+    let feedback = `Interacted with ${target} using ${toolName}. `;
+    if (blockTarget)
+        feedback += 'No block was mined or harvested by !useOn. ';
+    if (gains.length === 0)
+        feedback += 'No items were collected. ';
+    else
+        feedback += `Inventory gains from the interaction: ${gains.map(name => `${name} +${inventoryAfter[name] - (inventoryBefore[name] || 0)}`).join(', ')}. `;
+    feedback += inventoryChangeSummary(inventoryBefore, inventoryAfter, blockTarget ? [targetName, toolName] : [toolName]);
+    if (blockTarget)
+        feedback += ` To break and harvest ${targetName}, use !collectBlocks("${targetName}", 1).`;
+    log(bot, feedback);
 }
 
 async function autoLight(bot) {
@@ -33,6 +121,50 @@ async function equipHighestAttack(bot) {
         await bot.equip(weapon, 'hand');
 }
 
+function missingRecipeFeedback(itemName, inventory) {
+    const recipeInfo = mc.getCraftingRecipeInfo(itemName, inventory);
+    const selected = recipeInfo.selected;
+    if (!selected) return `${itemName} is either not an item, or it does not have a crafting recipe.`;
+    const missing = Object.entries(selected.ingredients).filter(([name, required]) =>
+        (inventory[name] || 0) < required
+    ).map(([name, required]) => {
+        const available = inventory[name] || 0;
+        return `${name}: need ${required}, have ${available}`;
+    }).join(', ');
+    const alternatives = formatRecipeAlternatives(recipeInfo.variants, selected);
+    return `You do not have the resources for the best matching ${itemName} recipe (${formatIngredients(selected.ingredients)}). Missing: ${missing || 'none shown'}.${alternatives ? ` ${alternatives}` : ''}`;
+}
+
+function matchingRecipeFeedback(itemName, inventory) {
+    const recipeInfo = mc.getCraftingRecipeInfo(itemName, inventory);
+    const selected = recipeInfo.selected;
+    if (!selected) return '';
+    const alternatives = formatRecipeAlternatives(recipeInfo.variants, selected);
+    return `The best matching ${itemName} recipe (${formatIngredients(selected.ingredients)}) is fully supplied.${alternatives ? ` ${alternatives}` : ''}`;
+}
+
+function craftingTableFeedback(bot, inventory, nearbyTable=null) {
+    if (nearbyTable) {
+        const position = nearbyTable.position;
+        return `A crafting_table is nearby at (${position.x}, ${position.y}, ${position.z}) and can be used.`;
+    }
+    if ((inventory.crafting_table || 0) > 0)
+        return `You have ${inventory.crafting_table} crafting_table in inventory. Place it with !placeHere("crafting_table"); !craftRecipe will also try to place it automatically.`;
+    const tableRecipe = mc.getCraftingRecipeInfo('crafting_table', inventory).selected;
+    const ingredients = tableRecipe ? formatIngredients(tableRecipe.ingredients) : '4 valid planks';
+    return `No crafting_table is in inventory or within 16 blocks. Craft one with !craftRecipe("crafting_table", 1) using ${ingredients}, then place it with !placeHere("crafting_table").`;
+}
+
+async function waitForCraftedInventory(bot, itemName, beforeCount, expectedIncrease) {
+    const deadline = Date.now() + 1500;
+    let count = world.getInventoryCounts(bot)[itemName] || 0;
+    while (count - beforeCount < expectedIncrease && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+        count = world.getInventoryCounts(bot)[itemName] || 0;
+    }
+    return count;
+}
+
 export async function craftRecipe(bot, itemName, num=1) {
     /**
      * Attempt to craft the given item name from a recipe. May craft many items.
@@ -42,47 +174,59 @@ export async function craftRecipe(bot, itemName, num=1) {
      * @example
      * await skills.craftRecipe(bot, "stick");
      **/
-    let placedTable = false;
-
-    if (mc.getItemCraftingRecipes(itemName).length == 0) {
+    const allRecipes = mc.getItemCraftingRecipes(itemName);
+    if (!allRecipes || allRecipes.length === 0) {
         log(bot, `${itemName} is either not an item, or it does not have a crafting recipe!`);
         return false;
     }
 
-    // get recipes that don't require a crafting table
-    let recipes = bot.recipesFor(mc.getItemId(itemName), null, 1, null); 
+    let placedTable = false;
+    const inventoryBefore = world.getInventoryCounts(bot);
+    const beforeCount = inventoryBefore[itemName] || 0;
+    const itemId = mc.getItemId(itemName);
+    let recipes = bot.recipesFor(itemId, null, 1, null);
     let craftingTable = null;
     const craftingTableRange = 16;
-    placeTable: if (!recipes || recipes.length === 0) {
-        recipes = bot.recipesFor(mc.getItemId(itemName), null, 1, true);
-        if(!recipes || recipes.length === 0) break placeTable; //Don't bother going to the table if we don't have the required resources.
+    if (!recipes || recipes.length === 0) {
+        const tableRecipes = bot.recipesFor(itemId, null, 1, true);
+        if (!tableRecipes || tableRecipes.length === 0) {
+            const recipeInfo = mc.getCraftingRecipeInfo(itemName, inventoryBefore);
+            let feedback = missingRecipeFeedback(itemName, inventoryBefore);
+            if (recipeInfo.selected?.requiresTable) {
+                const nearbyTable = world.getNearestBlock(bot, 'crafting_table', craftingTableRange);
+                feedback += ` ${craftingTableFeedback(bot, inventoryBefore, nearbyTable)}`;
+            }
+            log(bot, feedback);
+            return false;
+        }
 
-        // Look for crafting table
         craftingTable = world.getNearestBlock(bot, 'crafting_table', craftingTableRange);
-        if (craftingTable === null){
-
-            // Try to place crafting table
-            let hasTable = world.getInventoryCounts(bot)['crafting_table'] > 0;
+        if (craftingTable === null) {
+            const hasTable = (inventoryBefore.crafting_table || 0) > 0;
             if (hasTable) {
-                let pos = world.getNearestFreeSpace(bot, 1, 6);
+                const pos = world.getNearestFreeSpace(bot, 1, 6);
                 await placeBlock(bot, 'crafting_table', pos.x, pos.y, pos.z);
                 craftingTable = world.getNearestBlock(bot, 'crafting_table', craftingTableRange);
                 if (craftingTable) {
-                    recipes = bot.recipesFor(mc.getItemId(itemName), null, 1, craftingTable);
+                    recipes = bot.recipesFor(itemId, null, 1, craftingTable);
                     placedTable = true;
+                }
+                else {
+                    log(bot, `${matchingRecipeFeedback(itemName, inventoryBefore)} Crafting ${itemName} requires a placed crafting_table. ${craftingTableFeedback(bot, inventoryBefore)}`);
+                    return false;
                 }
             }
             else {
-                log(bot, `Crafting ${itemName} requires a crafting table.`)
+                log(bot, `${matchingRecipeFeedback(itemName, inventoryBefore)} Crafting ${itemName} requires a placed crafting_table. ${craftingTableFeedback(bot, inventoryBefore)}`);
                 return false;
             }
         }
         else {
-            recipes = bot.recipesFor(mc.getItemId(itemName), null, 1, craftingTable);
+            recipes = bot.recipesFor(itemId, null, 1, craftingTable);
         }
     }
     if (!recipes || recipes.length === 0) {
-        log(bot, `You do not have the resources to craft a ${itemName}. It requires: ${Object.entries(mc.getItemCraftingRecipes(itemName)[0][0]).map(([key, value]) => `${key}: ${value}`).join(', ')}.`);
+        log(bot, missingRecipeFeedback(itemName, inventoryBefore));
         if (placedTable) {
             await collectBlock(bot, 'crafting_table', 1);
         }
@@ -96,13 +240,21 @@ export async function craftRecipe(bot, itemName, num=1) {
     const recipe = recipes[0];
     console.log('crafting...');
     //Check that the agent has sufficient items to use the recipe `num` times.
-    const inventory = world.getInventoryCounts(bot); //Items in the agents inventory
-    const requiredIngredients = mc.ingredientsFromPrismarineRecipe(recipe); //Items required to use the recipe once.
-    const craftLimit = mc.calculateLimitingResource(inventory, requiredIngredients);
-    
-    await bot.craft(recipe, Math.min(craftLimit.num, num), craftingTable);
-    if(craftLimit.num<num) log(bot, `Not enough ${craftLimit.limitingResource} to craft ${num}, crafted ${craftLimit.num}. You now have ${world.getInventoryCounts(bot)[itemName]} ${itemName}.`);
-    else log(bot, `Successfully crafted ${itemName}, you now have ${world.getInventoryCounts(bot)[itemName]} ${itemName}.`);
+    const requiredIngredients = mc.ingredientsFromPrismarineRecipe(recipe);
+    const craftLimit = mc.calculateLimitingResource(inventoryBefore, requiredIngredients);
+    const executions = Math.min(craftLimit.num, num);
+    const expectedItems = executions * (recipe.result?.count || 1);
+
+    await bot.craft(recipe, executions, craftingTable);
+    const afterCount = await waitForCraftedInventory(bot, itemName, beforeCount, expectedItems);
+    const produced = Math.max(0, afterCount - beforeCount);
+    const requestSummary = executions < num
+        ? `Requested ${num} recipe executions, but resources allowed ${executions}`
+        : `Completed ${executions} recipe execution${executions === 1 ? '' : 's'}`;
+    const outputSummary = produced > 0
+        ? `produced ${produced} ${itemName}; inventory now has ${afterCount}`
+        : `expected ${expectedItems} ${itemName}, but inventory confirmation is still pending`;
+    log(bot, `${requestSummary}; ${outputSummary}.`);
     if (placedTable) {
         await collectBlock(bot, 'crafting_table', 1);
     }
@@ -139,12 +291,13 @@ export async function wait(bot, milliseconds) {
     return true;
 }
 
-export async function smeltItem(bot, itemName, num=1) {
+export async function smeltItem(bot, itemName, num=1, result=null) {
     /**
      * Puts 1 coal in furnace and smelts the given item name, waits until the furnace runs out of fuel or input items.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
      * @param {string} itemName, the item name to smelt. Ores must contain "raw" like raw_iron.
      * @param {number} num, the number of items to smelt. Defaults to 1.
+     * @param {object} [result], optional collector filled with the furnace output actually taken: { product, taken }.
      * @returns {Promise<boolean>} true if the item was smelted, false otherwise. Fail
      * @example
      * await skills.smeltItem(bot, "raw_iron");
@@ -227,6 +380,7 @@ export async function smeltItem(bot, itemName, num=1) {
     // put the items in the furnace
     await furnace.putInput(mc.getItemId(itemName), null, num);
     // wait for the items to smelt
+    const outputCountsBefore = world.getInventoryCounts(bot);
     let total = 0;
     let smelted_item = null;
     await new Promise(resolve => setTimeout(resolve, 200));
@@ -256,6 +410,17 @@ export async function smeltItem(bot, itemName, num=1) {
     }
 
     await bot.closeWindow(furnace);
+
+    if (result) {
+        result.product = smelted_item?.name || null;
+        result.taken = total;
+    }
+
+    // Let the client inventory reflect the taken output before callers
+    // compare before/after counts as evidence.
+    if (smelted_item && total > 0) {
+        await waitForCraftedInventory(bot, smelted_item.name, outputCountsBefore[smelted_item.name] || 0, total);
+    }
 
     if (placedFurnace) {
         await collectBlock(bot, 'furnace', 1);
@@ -412,15 +577,155 @@ export async function defendSelf(bot, range=9) {
     return attacked;
 }
 
+const COLLECTION_STALL_TIMEOUT_MS = 25000;
+const COLLECTION_PROGRESS_DISTANCE = 3;
+const COLLECTION_TARGET_FAILURE_LIMIT = 2;
+const COLLECTION_TARGET_AVOID_MS = 2 * 60 * 1000;
+
+function collectionTargetKey(blockType, position) {
+    return `${blockType}:${position.x},${position.y},${position.z}`;
+}
+
+function collectionTargetFailures(bot) {
+    bot._collectionTargetFailures ??= new Map();
+    return bot._collectionTargetFailures;
+}
+
+export function isCollectionTargetTemporarilyAvoided(bot, blockType, position, now=Date.now()) {
+    // Mineflayer calls findBlocks predicates with positionless palette blocks
+    // before checking concrete world positions.
+    if (!position) return false;
+    const failures = collectionTargetFailures(bot);
+    const key = collectionTargetKey(blockType, position);
+    const entry = failures.get(key);
+    if (!entry) return false;
+    if (entry.avoidUntil > now) return true;
+    if (entry.avoidUntil > 0) failures.delete(key);
+    return false;
+}
+
+export function recordCollectionTargetFailure(bot, blockType, position, now=Date.now()) {
+    const failures = collectionTargetFailures(bot);
+    const key = collectionTargetKey(blockType, position);
+    const entry = failures.get(key) || { failures: 0, avoidUntil: 0 };
+    entry.failures++;
+    if (entry.failures >= COLLECTION_TARGET_FAILURE_LIMIT)
+        entry.avoidUntil = now + COLLECTION_TARGET_AVOID_MS;
+    failures.set(key, entry);
+    return entry;
+}
+
+function clearCollectionTargetFailure(bot, blockType, position) {
+    collectionTargetFailures(bot).delete(collectionTargetKey(blockType, position));
+}
+
+function inventoryItemCount(bot) {
+    if (typeof bot.inventory?.items !== 'function') return 0;
+    try {
+        return bot.inventory.items().reduce((total, item) => total + (item.count || 0), 0);
+    }
+    catch (_error) {
+        return 0;
+    }
+}
+
+function targetStillExists(bot, block) {
+    try {
+        const current = bot.blockAt(block.position);
+        return current && current.type === block.type;
+    }
+    catch (_error) {
+        return true;
+    }
+}
+
+export async function collectBlockWithProgress(bot, block, blockType, options={}) {
+    const stallTimeout = options.stallTimeout ?? COLLECTION_STALL_TIMEOUT_MS;
+    const checkInterval = options.checkInterval ?? 500;
+    const target = `(${block.position.x}, ${block.position.y}, ${block.position.z})`;
+    let lastProgress = Date.now();
+    let progressPosition = bot.entity.position.clone();
+    let bestDistance = bot.entity.position.distanceTo(block.position);
+    let itemCount = inventoryItemCount(bot);
+    let targetPresent = true;
+    const visitedProgressCells = new Set([
+        `${Math.floor(progressPosition.x)},${Math.floor(progressPosition.y)},${Math.floor(progressPosition.z)}`
+    ]);
+    let settleStall;
+    const stalled = new Promise(resolve => { settleStall = resolve; });
+
+    const monitor = setInterval(() => {
+        if (bot.interrupt_code) return;
+        const now = Date.now();
+        const position = bot.entity?.position;
+        if (!position) return;
+        const distance = position.distanceTo(block.position);
+        const currentItemCount = inventoryItemCount(bot);
+        const targetRemoved = !targetStillExists(bot, block);
+        const closer = distance <= bestDistance - 1;
+        const progressCell = `${Math.floor(position.x)},${Math.floor(position.y)},${Math.floor(position.z)}`;
+        const advanced = position.distanceTo(progressPosition) >= COLLECTION_PROGRESS_DISTANCE
+            && distance <= bestDistance + COLLECTION_PROGRESS_DISTANCE
+            && !visitedProgressCells.has(progressCell);
+
+        if ((targetPresent && targetRemoved) || currentItemCount > itemCount || closer || advanced) {
+            lastProgress = now;
+            progressPosition = position.clone();
+            bestDistance = Math.min(bestDistance, distance);
+            itemCount = currentItemCount;
+            targetPresent = !targetRemoved;
+            visitedProgressCells.add(progressCell);
+            return;
+        }
+
+        if (now - lastProgress >= stallTimeout) {
+            settleStall({
+                stalled: true,
+                reason: `no meaningful progress for ${Math.round(stallTimeout / 1000)} seconds; remained near (${Math.floor(position.x)}, ${Math.floor(position.y)}, ${Math.floor(position.z)}) while target ${blockType} at ${target} remained uncollected`,
+            });
+        }
+    }, checkInterval);
+
+    const collection = bot.collectBlock.collect(block, {
+        canStoreTarget: target => canStoreCollectionTarget(bot, target),
+    }).then(
+        () => ({ completed: true }),
+        error => ({ completed: true, error })
+    );
+
+    try {
+        const outcome = await Promise.race([collection, stalled]);
+        if (outcome.stalled) {
+            let cancelError = null;
+            try {
+                await bot.collectBlock.cancelTask();
+            }
+            catch (error) {
+                cancelError = error;
+            }
+            await collection;
+            if (cancelError) throw cancelError;
+            const error = new Error(outcome.reason);
+            error.name = 'CollectionStalled';
+            throw error;
+        }
+        if (outcome.error) throw outcome.error;
+    }
+    finally {
+        clearInterval(monitor);
+    }
+}
 
 
-export async function collectBlock(bot, blockType, num=1, exclude=null) {
+
+export async function collectBlock(bot, blockType, num=1, exclude=null, result=null) {
     /**
      * Collect one of the given block type.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
      * @param {string} blockType, the type of block to collect.
      * @param {number} num, the number of blocks to collect. Defaults to 1.
      * @param {list} exclude, a list of positions to exclude from the search. Defaults to null.
+     * @param {object} [result], optional collector filled with { harvested, minedBlocks }: one entry per block verified removed from the world.
      * @returns {Promise<boolean>} true if the block was collected, false if the block type was not found.
      * @example
      * await skills.collectBlock(bot, "oak_log");
@@ -429,6 +734,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null) {
         log(bot, `Invalid number of blocks to collect: ${num}.`);
         return false;
     }
+    const inventoryBefore = world.getInventoryCounts(bot);
     let blocktypes = [blockType];
     if (blockType === 'coal' || blockType === 'diamond' || blockType === 'emerald' || blockType === 'iron' || blockType === 'gold' || blockType === 'lapis_lazuli' || blockType === 'redstone')
         blocktypes.push(blockType+'_ore');
@@ -441,6 +747,22 @@ export async function collectBlock(bot, blockType, num=1, exclude=null) {
     const isLiquid = blockType === 'lava' || blockType === 'water';
 
     let collected = 0;
+    const minedBlocks = [];
+    const unreachable = [];
+    const reportObserved = () => {
+        if (result) {
+            result.harvested = collected;
+            // One entry per harvested block; callers rely on the multiplicity.
+            result.minedBlocks = [...minedBlocks];
+            result.requestedType = blockType;
+        }
+    };
+
+    const stopCollection = () => {
+        if (!bot.interrupt_code) return false;
+        log(bot, `Collection of ${blockType} was interrupted after collecting ${collected}.`);
+        return true;
+    };
 
     const movements = new pf.Movements(bot);
     movements.dontMineUnderFallingBlock = false;
@@ -450,8 +772,17 @@ export async function collectBlock(bot, blockType, num=1, exclude=null) {
     const unsafeBlocks = ['obsidian'];
 
     for (let i=0; i<num; i++) {
+        if (stopCollection()) break;
+        let avoidedTarget = false;
         let blocks = world.getNearestBlocksWhere(bot, block => {
             if (!blocktypes.includes(block.name)) {
+                return false;
+            }
+            if (!block.position) {
+                return true;
+            }
+            if (isCollectionTargetTemporarilyAvoided(bot, blockType, block.position)) {
+                avoidedTarget = true;
                 return false;
             }
             if (exclude) {
@@ -459,6 +790,11 @@ export async function collectBlock(bot, blockType, num=1, exclude=null) {
                     if (block.position.x === position.x && block.position.y === position.y && block.position.z === position.z) {
                         return false;
                     }
+                }
+            }
+            for (let position of unreachable) {
+                if (block.position.x === position.x && block.position.y === position.y && block.position.z === position.z) {
+                    return false;
                 }
             }
             if (isLiquid) {
@@ -470,7 +806,11 @@ export async function collectBlock(bot, blockType, num=1, exclude=null) {
         }, 64, 1);
 
         if (blocks.length === 0) {
-            if (collected === 0)
+            if (collected === 0 && avoidedTarget)
+                log(bot, `Temporarily avoiding repeatedly unreachable ${blockType} targets; no alternative target was found nearby.`);
+            else if (collected === 0 && unreachable.length > 0)
+                log(bot, `Could not reach any nearby ${blockType}.`);
+            else if (collected === 0)
                 log(bot, `No ${blockType} nearby to collect.`);
             else
                 log(bot, `No more ${blockType} nearby to collect.`);
@@ -482,6 +822,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null) {
             const bucket = bot.inventory.findInventoryItem('bucket');
             if (!bucket) {
                 log(bot, `Don't have bucket to harvest ${blockType}.`);
+                log(bot, inventoryChangeSummary(inventoryBefore, world.getInventoryCounts(bot), [blockType, 'bucket']));
                 return false;
             }
             await bot.equip(bucket, 'hand');
@@ -489,6 +830,7 @@ export async function collectBlock(bot, blockType, num=1, exclude=null) {
         const itemId = bot.heldItem ? bot.heldItem.type : null
         if (!block.canHarvest(itemId)) {
             log(bot, `Don't have right tools to harvest ${blockType}.`);
+            log(bot, inventoryChangeSummary(inventoryBefore, world.getInventoryCounts(bot), [blockType]));
             return false;
         }
         try {
@@ -498,34 +840,66 @@ export async function collectBlock(bot, blockType, num=1, exclude=null) {
             }
             else if (mc.mustCollectManually(blockType)) {
                 await goToPosition(bot, block.position.x, block.position.y, block.position.z, 2);
+                if (stopCollection()) break;
                 await bot.dig(block);
+                if (stopCollection()) break;
                 await pickupNearbyItems(bot);
                 success = true;
             }
             else {
-                await bot.collectBlock.collect(block);
+                await collectBlockWithProgress(bot, block, blockType);
+                if (stopCollection()) break;
                 success = true;
             }
-            if (success)
+            // collect() resolving does not prove the block was harvested: the
+            // library skips blocks it cannot harvest or safely break. Only a
+            // block that is gone from the world counts as harvested.
+            if (success && !isLiquid && targetStillExists(bot, block)) {
+                const target = `(${block.position.x}, ${block.position.y}, ${block.position.z})`;
+                log(bot, `${blockType} at ${target} is still present after the collection attempt; it was not harvested.`);
+                unreachable.push(block.position);
+                recordCollectionTargetFailure(bot, blockType, block.position);
+                success = false;
+            }
+            if (success) {
                 collected++;
+                minedBlocks.push(block.name);
+                clearCollectionTargetFailure(bot, blockType, block.position);
+            }
+            if (stopCollection()) break;
             await autoLight(bot);
         }
         catch (err) {
+            if (stopCollection()) break;
             if (err.name === 'NoChests') {
                 log(bot, `Failed to collect ${blockType}: Inventory full, no place to deposit.`);
                 break;
             }
-            else {
-                log(bot, `Failed to collect ${blockType}: ${err}.`);
-                continue;
+            unreachable.push(block.position);
+            const failure = recordCollectionTargetFailure(bot, blockType, block.position);
+            const target = `(${block.position.x}, ${block.position.y}, ${block.position.z})`;
+            if (err.name === 'CollectionStalled') {
+                log(bot, `Failed to collect ${blockType} at ${target}: ${err.message}.`);
             }
+            if (err.name === 'NoPath' || err.name === 'Timeout') {
+                log(bot, `Could not reach ${blockType} at ${target}: ${err.message || err.name}.`);
+            }
+            else if (err.name !== 'CollectionStalled') {
+                log(bot, `Failed to collect ${blockType} at ${target}: ${err}.`);
+            }
+            if (failure.avoidUntil > Date.now()) {
+                log(bot, `Temporarily avoiding ${blockType} at ${target} after ${failure.failures} failed collection attempts.`);
+                i--;
+            }
+            continue;
         }
-        
-        if (bot.interrupt_code)
-            break;  
     }
-    log(bot, `Collected ${collected} ${blockType}.`);
-    return collected > 0;
+    const inventoryAfter = world.getInventoryCounts(bot);
+    reportObserved();
+    const expectedItems = collectionExpectedItems(blockType, minedBlocks);
+    const feedback = collectionResultFeedback(blockType, collected, inventoryBefore, inventoryAfter, expectedItems);
+    log(bot, feedback.message);
+    return feedback.success;
 }
 
 export async function pickupNearbyItems(bot) {
@@ -537,7 +911,8 @@ export async function pickupNearbyItems(bot) {
      * await skills.pickupNearbyItems(bot);
      **/
     const distance = 8;
-    const getNearestItem = bot => bot.nearestEntity(entity => entity.name === 'item' && bot.entity.position.distanceTo(entity.position) < distance);
+    // Items the agent deliberately discarded are not picked back up.
+    const getNearestItem = bot => world.getNearestCollectableItem(bot, distance);
     let nearestItem = getNearestItem(bot);
     let pickedUp = 0;
     while (nearestItem) {
@@ -852,6 +1227,8 @@ export async function discard(bot, itemName, num=-1) {
             break;
         }
         let to_discard = num === -1 ? item.count : Math.min(num - discarded, item.count);
+        // Mark the drop site first so idle item pickup cannot undo this on purpose.
+        world.recordDiscard(bot, itemName, bot.entity.position);
         await bot.toss(item.type, null, to_discard);
         discarded += to_discard;
         if (num !== -1 && discarded >= num) {
@@ -1903,31 +2280,53 @@ function stringifyItem(bot, item) {
     return text;
 }
 
-export async function digDown(bot, distance = 10) {
+/** One digDown call. A shaft request larger than this is rejected instead of run. */
+export const MAX_DIG_DOWN = 16;
+
+export async function digDown(bot, distance = 10, observed = null) {
     /**
      * Digs down a specified distance. Will stop if it reaches lava, water, or a fall of >=4 blocks below the bot.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
-     * @param {int} distance, distance to dig down.
+     * @param {int} distance, distance to dig down. Must be from 1 to MAX_DIG_DOWN.
+     * @param {object} [observed] filled with excavated count and why the dig stopped.
      * @returns {Promise<boolean>} true if successfully dug all the way down.
      * @example
      * await skills.digDown(bot, 10);
      **/
+    const report = { requested: distance, excavated: 0, stop: 'completed', hazard: null };
+    const publish = () => { if (observed) Object.assign(observed, report); };
+    const finish = (stop, excavated, message, ok) => {
+        report.stop = stop;
+        report.excavated = excavated;
+        if (message) log(bot, message);
+        publish();
+        return ok;
+    };
+
+    if (!Number.isInteger(distance) || distance < 1 || distance > MAX_DIG_DOWN) {
+        return finish('invalid_request', 0, `digDown distance must be an integer from 1 to ${MAX_DIG_DOWN}.`, false);
+    }
 
     let start_block_pos = bot.blockAt(bot.entity.position).position;
     for (let i = 1; i <= distance; i++) {
+        if (bot.interrupt_code) {
+            return finish('interrupted', report.excavated, `Dug down ${report.excavated} blocks, then the dig was interrupted.`, false);
+        }
         const targetBlock = bot.blockAt(start_block_pos.offset(0, -i, 0));
         let belowBlock = bot.blockAt(start_block_pos.offset(0, -i-1, 0));
 
         if (!targetBlock || !belowBlock) {
-            log(bot, `Dug down ${i-1} blocks, but reached the end of the world.`);
-            return true;
+            const stop = report.excavated > 0 ? 'completed' : 'world_bottom';
+            return finish(stop, report.excavated, `Dug down ${report.excavated} blocks, but reached the end of the world.`, report.excavated > 0);
         }
 
         // Check for lava, water
-        if (targetBlock.name === 'lava' || targetBlock.name === 'water' || 
+        if (targetBlock.name === 'lava' || targetBlock.name === 'water' ||
             belowBlock.name === 'lava' || belowBlock.name === 'water') {
-            log(bot, `Dug down ${i-1} blocks, but reached ${belowBlock ? belowBlock.name : '(lava/water)'}`)
-            return false;
+            const hazard = [targetBlock.name, belowBlock.name].find(name => name === 'lava' || name === 'water') || 'lava';
+            report.hazard = hazard;
+            const stop = report.excavated > 0 ? 'hazard' : 'hazard';
+            return finish(stop, report.excavated, `Dug down ${report.excavated} blocks, but reached ${hazard}`, report.excavated > 0);
         }
 
         const MAX_FALL_BLOCKS = 2;
@@ -1940,8 +2339,7 @@ export async function digDown(bot, distance = 10) {
             belowBlock = bot.blockAt(belowBlock.position.offset(0, -1, 0));
         }
         if (num_fall_blocks > MAX_FALL_BLOCKS) {
-            log(bot, `Dug down ${i-1} blocks, but reached a drop below the next block.`);
-            return false;
+            return finish('unsafe_drop', report.excavated, `Dug down ${report.excavated} blocks, but reached a drop below the next block.`, false);
         }
 
         if (targetBlock.name === 'air' || targetBlock.name === 'cave_air') {
@@ -1952,12 +2350,14 @@ export async function digDown(bot, distance = 10) {
 
         let dug = await breakBlockAt(bot, targetBlock.position.x, targetBlock.position.y, targetBlock.position.z);
         if (!dug) {
-            log(bot, 'Failed to dig block at position:' + targetBlock.position);
-            return false;
+            return finish('obstacle', report.excavated, 'Failed to dig block at position:' + targetBlock.position, false);
         }
+        report.excavated++;
     }
-    log(bot, `Dug down ${distance} blocks.`);
-    return true;
+    if (report.excavated === 0) {
+        return finish('no_progress', 0, 'Dug down 0 blocks.', false);
+    }
+    return finish('completed', report.excavated, `Dug down ${report.excavated} blocks.`, true);
 }
 
 export async function goToSurface(bot) {
@@ -1987,19 +2387,21 @@ export async function useToolOn(bot, toolName, targetName) {
      * @param {string} targetName - entity type, block type, or "nothing" for no target
      * @returns {Promise<boolean>} true if action succeeded
      */
-    if (!bot.inventory.slots.find(slot => slot && slot.name === toolName) && !bot.game.gameMode === 'creative') {
+    if (toolName !== 'hand' && !bot.inventory.slots.find(slot => slot && slot.name === toolName) && bot.game.gameMode !== 'creative') {
         log(bot, `You do not have any ${toolName} to use.`);
         return false;
     }
 
     targetName = targetName.toLowerCase();
     if (targetName === 'nothing') {
+        const inventoryBefore = world.getInventoryCounts(bot);
         const equipped = await equip(bot, toolName);
         if (!equipped) {
             return false;
         }
         await bot.activateItem();
-        log(bot, `Used ${toolName}.`);
+        await waitForInteractionInventory(bot);
+        logInteractionResult(bot, toolName, targetName, inventoryBefore);
     } else if (world.isEntityType(targetName)) {
         const entity = world.getNearestEntityWhere(bot, e => e.name === targetName, 64);
         if (!entity) {
@@ -2014,8 +2416,10 @@ export async function useToolOn(bot, toolName, targetName) {
             const equipped = await equip(bot, toolName);
             if (!equipped) return false;
         }
+        const inventoryBefore = world.getInventoryCounts(bot);
         await bot.useOn(entity);
-        log(bot, `Used ${toolName} on ${targetName}.`);
+        await waitForInteractionInventory(bot);
+        logInteractionResult(bot, toolName, targetName, inventoryBefore);
     } else {
         let block = null;
         if (targetName === 'water' || targetName === 'lava') {
@@ -2082,12 +2486,14 @@ export async function useToolOn(bot, toolName, targetName) {
         log(bot, `Could not equip ${toolName}.`);
         return false;
     }
+    const inventoryBefore = world.getInventoryCounts(bot);
     if (toolName.includes('bucket')) {
         await bot.activateItem();
     }
     else {
         await bot.activateBlock(block);
     }
-    log(bot, `Used ${toolName} on ${block.name}.`);
+    await waitForInteractionInventory(bot);
+    logInteractionResult(bot, toolName, block.name, inventoryBefore, true);
     return true;
  }

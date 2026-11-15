@@ -81,6 +81,11 @@
         "description": "Number of examples to select to help prompt better LLM responses",
         "default": 2
     },
+    "allow_retrieved_examples_in_non_human_contexts": {
+        "type": "boolean",
+        "description": "Whether dynamically retrieved behavioral conversation examples may be inserted for autonomous decisions, game/system events, and peer-agent messages. Human-request contexts still use examples.",
+        "default": false
+    },
     "max_commands": {
         "type": "number",
         "description": "Maximum number of commands allowed in consecutive responses. -1 for no limit",
@@ -117,6 +122,11 @@
         "description": "Whether to render bot view for user observation. Does not give bot vision.",
         "default": false
     },
+    "persistent_planning": {
+        "type": "boolean",
+        "description": "Experimental. Global default for persistent per-agent plans (bots/<name>/plan.json), including the extra planning model requests and !reconsiderPlan. An agent profile may set its own boolean persistent_planning to opt in or out independently. Disabled by default.",
+        "default": false
+    },
     "allow_insecure_coding": {
         "type": "boolean",
         "description": "Whether to allow newAction command that let's LLM write/run code on host computer. Despite sandboxxing, it is potentially insecure.",
@@ -136,5 +146,25 @@
         "type": "number",
         "description": "Number of seconds allowed for the bot to spawn before throwing an error. Increase when spawning takes a while.",
         "default": 30
+    },
+    "reasoning": {
+        "type": "object",
+        "description": "Separate bounded parameters for !think and automatic reflection (auto_reflection, auto_failure_threshold, auto_cooldown_ms). Does not change routine action requests.",
+        "default": {
+            "think": false,
+            "keep_alive": -1,
+            "timeout_ms": 45000,
+            "cooldown_ms": 45000,
+            "max_consecutive": 2,
+            "max_concurrent": 1,
+            "max_predict": 1024,
+            "auto_reflection": true,
+            "auto_failure_threshold": 2,
+            "auto_cooldown_ms": 30000,
+            "options": {
+                "num_ctx": 8192,
+                "num_predict": 1024
+            }
+        }
     }
 }

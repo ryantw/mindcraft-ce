@@ -14,6 +14,8 @@ class MindServerProxy {
 
         this.socket = null;
         this.connected = false;
+        this.pendingBotChats = [];
+        this.pendingPlayerMessages = [];
         this.agents = [];
         this.convoManager = null;
         this.getFullState = null;
@@ -90,6 +92,11 @@ class MindServerProxy {
         });
 
         this.socket.on('chat-message', (agentName, json) => {
+            if (!this.agent?.ready) {
+                this.pendingBotChats.push([agentName, json]);
+                console.log(`[${this.name}] Queued conversation message from ${agentName} until initialization completes.`);
+                return;
+            }
             this.convoManager.receiveFromBot(agentName, json);
         });
 
@@ -108,8 +115,13 @@ class MindServerProxy {
         });
 
         this.socket.on('send-message', (data) => {
+            if (!this.agent?.ready) {
+                this.pendingPlayerMessages.push(data);
+                console.log(`[${this.name}] Queued message from ${data?.from} until initialization completes.`);
+                return;
+            }
             try {
-                this.agent?.respondFunc(data.from, data.message);
+                this.agent.respondFunc(data.from, data.message);
             } catch (error) {
                 console.error('Error: ', JSON.stringify(error, Object.getOwnPropertyNames(error)));
             }
@@ -132,6 +144,21 @@ class MindServerProxy {
 
     setAgent(agent) {
         this.agent = agent;
+    }
+
+    flushPending() {
+        const chats = this.pendingBotChats.splice(0);
+        const players = this.pendingPlayerMessages.splice(0);
+        for (const [agentName, json] of chats) {
+            this.convoManager.receiveFromBot(agentName, json);
+        }
+        for (const data of players) {
+            try {
+                this.agent?.respondFunc(data.from, data.message);
+            } catch (error) {
+                console.error('Error: ', JSON.stringify(error, Object.getOwnPropertyNames(error)));
+            }
+        }
     }
 
     getAgents() {

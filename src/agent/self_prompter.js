@@ -1,3 +1,5 @@
+import { reflect } from './reasoning.js';
+
 const STOPPED = 0
 const ACTIVE = 1
 const PAUSED = 2
@@ -10,9 +12,17 @@ export class SelfPrompter {
         this.prompt = '';
         this.idle_time = 0;
         this.cooldown = 2000;
+        this.no_command_limit = 3;
+        this.recovery_backoff = 10000;
+        this.max_recovery_backoff = 120000;
+        this.recovery_attempts = 0;
     }
 
     start(prompt) {
+        if (this.agent.shut_up) {
+            console.log(`[${this.agent.name}] Self-prompting remains stopped because the agent was intentionally silenced.`);
+            return;
+        }
         console.log('Self-prompting started.');
         if (!prompt) {
             if (!this.prompt)
@@ -36,14 +46,17 @@ export class SelfPrompter {
         return this.state === PAUSED;
     }
 
-    async handleLoad(prompt, state) {
+    async handleLoad(prompt, state, { resumePaused = false } = {}) {
         if (state == undefined)
             state = STOPPED;
         this.state = state;
         this.prompt = prompt;
         if (state !== STOPPED && !prompt)
             throw new Error('No prompt loaded when self-prompting is active');
-        if (state === ACTIVE) {
+        if (state === ACTIVE || (state === PAUSED && resumePaused)) {
+            if (state === PAUSED) {
+                console.log(`[${this.agent.name}] Restoring a saved paused autonomous goal as active because no conversation remains to resume it.`);
+            }
             await this.start(prompt);
         }
     }
@@ -61,29 +74,108 @@ export class SelfPrompter {
         console.log('starting self-prompt loop')
         this.loop_active = true;
         let no_command_count = 0;
-        const MAX_NO_COMMAND = 3;
-        while (!this.interrupt) {
-            const msg = `You are self-prompting with the goal: '${this.prompt}'. Your next response MUST contain a command with this syntax: !commandName. Respond:`;
-            
-            let used_command = await this.agent.handleMessage('system', msg, -1);
-            if (!used_command) {
-                no_command_count++;
-                if (no_command_count >= MAX_NO_COMMAND) {
-                    let out = `Agent did not use command in the last ${MAX_NO_COMMAND} auto-prompts. Stopping auto-prompting.`;
-                    this.agent.openChat(out);
-                    console.warn(out);
-                    this.state = STOPPED;
+        try {
+            while (this._shouldContinue()) {
+                await this.agent.plan_manager?.ensurePlan?.();
+                if (!this._shouldContinue()) break;
+                const activePlan = this.agent.plan_manager?.getCurrentPlan?.();
+                const activeStep = this.agent.plan_manager?.getCurrentStep?.();
+                const planText = activePlan && activeStep
+                    ? ` Your persistent objective is '${activePlan.objective}'. The current verified step is '${activeStep.description}'.`
+                    : '';
+                const msg = `You are self-prompting with the broad goal: '${this.prompt}'.${planText} ` +
+                    `Retain freedom to react to safety, the environment, and social interaction, but otherwise advance the current plan. ` +
+                    `Your next response MUST contain a command with this syntax: !commandName. Respond:`;
+
+                const used_command = await this.agent.handleMessage('system', msg, -1);
+                if (!this._shouldContinue())
                     break;
+
+                if (!used_command) {
+                    if (this.agent.actions?.repeatSuppressed) {
+                        // The model chose an action the recovery path already
+                        // refused. Wait, and do not start a second reflection.
+                        this.agent.actions.repeatSuppressed = false;
+                        this.recovery_attempts = Math.min(this.recovery_attempts + 1, 8);
+                        const backoff = Math.min(
+                            this.recovery_backoff * (2 ** (this.recovery_attempts - 1)),
+                            this.max_recovery_backoff
+                        );
+                        console.warn(`[${this.agent.name}] Repeated action suppressed. Waiting ${backoff}ms before the next decision.`);
+                        await this._wait(backoff);
+                        continue;
+                    }
+                    no_command_count++;
+                    console.warn(`[${this.agent.name}] Self-prompt produced no command (${no_command_count}/${this.no_command_limit}).`);
+                    if (no_command_count >= this.no_command_limit) {
+                        const recovered = await this._recoverFromNoCommand();
+                        if (!this._shouldContinue())
+                            break;
+                        if (recovered) {
+                            no_command_count = 0;
+                            this.recovery_attempts = 0;
+                            await this._wait(this.cooldown);
+                        }
+                        else {
+                            no_command_count = 0;
+                            this.recovery_attempts++;
+                            const backoff = Math.min(
+                                this.recovery_backoff * (2 ** (this.recovery_attempts - 1)),
+                                this.max_recovery_backoff
+                            );
+                            console.warn(`[${this.agent.name}] Self-prompt recovery found no action. Retrying in ${backoff}ms (attempt ${this.recovery_attempts}).`);
+                            await this._wait(backoff);
+                        }
+                    }
+                    else {
+                        await this._wait(this.cooldown);
+                    }
+                }
+                else {
+                    no_command_count = 0;
+                    this.recovery_attempts = 0;
+                    await this._wait(this.cooldown);
                 }
             }
-            else {
-                no_command_count = 0;
-                await new Promise(r => setTimeout(r, this.cooldown));
-            }
         }
-        console.log('self prompt loop stopped')
-        this.loop_active = false;
-        this.interrupt = false;
+        finally {
+            console.log('self prompt loop stopped')
+            this.loop_active = false;
+            this.interrupt = false;
+        }
+    }
+
+    _shouldContinue() {
+        return this.state === ACTIVE && !this.interrupt && !this.agent.shut_up;
+    }
+
+    async _recoverFromNoCommand() {
+        console.warn(`[${this.agent.name}] Self-prompt recovery started after ${this.no_command_limit} responses without a command.`);
+        const reflection = await reflect(
+            this.agent,
+            'I have not selected an action in several attempts. Reconsider my current goal and situation. What meaningful action should I take next?',
+            { source: 'no_command', trigger: { reason: 'no_command_recovery', key: 'no_command' } }
+        );
+        if (!this._shouldContinue())
+            return false;
+
+        await this.agent.history.add('system', reflection);
+        await this.agent.history.save();
+
+        const recovery_prompt = `Privately reconsider your current goal: '${this.prompt}'. Use the reflection you just received, select one meaningful next action, and respond with a command using this syntax: !commandName.`;
+        const used_command = await this.agent.handleMessage('system', recovery_prompt, -1);
+        if (used_command)
+            console.log(`[${this.agent.name}] Self-prompt recovery selected an action.`);
+        return used_command;
+    }
+
+    async _wait(delay) {
+        const interval = Math.min(delay, 500);
+        let remaining = delay;
+        while (remaining > 0 && this._shouldContinue()) {
+            await new Promise(resolve => setTimeout(resolve, Math.min(interval, remaining)));
+            remaining -= interval;
+        }
     }
 
     update(delta) {
@@ -126,9 +218,10 @@ export class SelfPrompter {
     }
 
     async pause() {
+        // Stop the decision loop only. A conversation reply must not cancel
+        // the collect, walk, or craft that is already in progress.
         this.interrupt = true;
-        await this.agent.actions.stop();
-        this.stopLoop();
+        await this.stopLoop();
         this.state = PAUSED;
     }
 

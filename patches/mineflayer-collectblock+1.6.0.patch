@@ -1,7 +1,24 @@
 diff --git a/node_modules/mineflayer-collectblock/lib/CollectBlock.js b/node_modules/mineflayer-collectblock/lib/CollectBlock.js
+index 445df38..2e0c634 100644
 --- a/node_modules/mineflayer-collectblock/lib/CollectBlock.js
 +++ b/node_modules/mineflayer-collectblock/lib/CollectBlock.js
-@@ -28,7 +28,16 @@
+@@ -21,33 +21,83 @@ const util_1 = require("util");
+ function collectAll(bot, options) {
+     return __awaiter(this, void 0, void 0, function* () {
+         while (!options.targets.empty) {
+-            yield (0, Inventory_1.emptyInventoryIfFull)(bot, options.chestLocations, options.itemFilter);
++            if (bot.collectBlock._cancelRequested)
++                break;
+             const closest = options.targets.getClosest();
+             if (closest == null)
+                 break;
++            // A full set of slots does not mean a drop cannot be stored: it may
++            // fit into an existing partial stack. Callers that know the drop
++            // can declare that through canStoreTarget.
++            if (!(options.canStoreTarget && options.canStoreTarget(closest)))
++                yield (0, Inventory_1.emptyInventoryIfFull)(bot, options.chestLocations, options.itemFilter);
++            if (bot.collectBlock._cancelRequested)
++                break;
              switch (closest.constructor.name) {
                  case 'Block': {
                      const goal = new mineflayer_pathfinder_1.goals.GoalLookAtBlock(closest.position, bot.world);
@@ -11,15 +28,136 @@ diff --git a/node_modules/mineflayer-collectblock/lib/CollectBlock.js b/node_mod
 +                    }
 +                    catch (err) {
 +                        if (err.name !== 'NoPath') throw err;
++                        if (bot.collectBlock._cancelRequested) throw err;
 +                        // A buried block has no visible face in the current world.
 +                        // Tunnel next to it first, then check reach and line of sight again.
 +                        yield bot.pathfinder.goto(new mineflayer_pathfinder_1.goals.GoalGetToBlock(closest.position.x, closest.position.y, closest.position.z));
++                        if (bot.collectBlock._cancelRequested) break;
 +                        yield bot.pathfinder.goto(goal);
 +                    }
++                    if (bot.collectBlock._cancelRequested) break;
                      yield mineBlock(bot, closest, options);
                      // TODO: options.ignoreNoPath
                      break;
-@@ -190,8 +199,6 @@
+                 }
+                 case 'Entity': {
+                     // Don't collect any entities that are marked as 'invalid'
+-                    if (!closest.isValid)
++                    if (!closest.isValid || bot.collectBlock._cancelRequested)
+                         break;
+                     const tempEvents = new TemporarySubscriber_1.TemporarySubscriber(bot);
++                    let pickupSettled = false;
++                    let cancelPoll = null;
++                    let finishPickup = () => { };
++                    const finishPickupWait = () => {
++                        if (pickupSettled) return;
++                        pickupSettled = true;
++                        if (cancelPoll != null) clearInterval(cancelPoll);
++                        tempEvents.cleanup();
++                    };
+                     const waitForPickup = new Promise(resolve => {
++                        finishPickup = () => {
++                            finishPickupWait();
++                            resolve();
++                        };
+                         tempEvents.subscribeTo('entityGone', (entity) => {
+-                            if (entity === closest) {
+-                                tempEvents.cleanup();
+-                                resolve();
+-                            }
++                            if (entity === closest) finishPickup();
+                         });
++                        // Cancellation has to be able to end this wait even when
++                        // pathfinder is already idle and entityGone never arrives.
++                        cancelPoll = setInterval(() => {
++                            if (bot.collectBlock._cancelRequested || !closest.isValid) finishPickup();
++                        }, 50);
+                     });
+-                    yield bot.pathfinder.goto(new mineflayer_pathfinder_1.goals.GoalFollow(closest, 0));
+-                    yield waitForPickup;
++                    try {
++                        yield bot.pathfinder.goto(new mineflayer_pathfinder_1.goals.GoalFollow(closest, 0));
++                        if (!bot.collectBlock._cancelRequested) {
++                            // Arrival does not mean the item was collected. Don't
++                            // wait forever for an entityGone that will not come.
++                            const pickupTimeout = setTimeout(() => finishPickup(), 3000);
++                            try {
++                                yield waitForPickup;
++                            }
++                            finally {
++                                clearTimeout(pickupTimeout);
++                            }
++                        }
++                    }
++                    finally {
++                        finishPickupWait();
++                    }
+                     break;
+                 }
+                 default: {
+@@ -66,6 +116,10 @@ const equipToolOptions = {
+ function mineBlock(bot, block, options) {
+     var _a, _b;
+     return __awaiter(this, void 0, void 0, function* () {
++        if (bot.collectBlock._cancelRequested) {
++            options.targets.removeTarget(block);
++            return;
++        }
+         // @ts-expect-error
+         if (((_a = bot.blockAt(block.position)) === null || _a === void 0 ? void 0 : _a.type) !== block.type || ((_b = bot.blockAt(block.position)) === null || _b === void 0 ? void 0 : _b.type) === 0 || !bot.pathfinder.movements.safeToBreak(block)) {
+             options.targets.removeTarget(block);
+@@ -84,15 +138,27 @@ function mineBlock(bot, block, options) {
+         });
+         try {
+             yield bot.dig(block);
+-            // Waiting for items to drop
++            if (bot.collectBlock._cancelRequested) return;
++            // Waiting for items to drop. Also give up if physics ticks stop
++            // (death) or the collection is cancelled while standing still.
+             yield new Promise(resolve => {
+                 let remainingTicks = 10;
++                let settled = false;
++                const finish = () => {
++                    if (settled) return;
++                    settled = true;
++                    clearInterval(cancelPoll);
++                    clearTimeout(backup);
++                    tempEvents.cleanup();
++                    resolve();
++                };
++                const cancelPoll = setInterval(() => {
++                    if (bot.collectBlock._cancelRequested) finish();
++                }, 50);
++                const backup = setTimeout(finish, 1000);
+                 tempEvents.subscribeTo('physicsTick', () => {
+                     remainingTicks--;
+-                    if (remainingTicks <= 0) {
+-                        tempEvents.cleanup();
+-                        resolve();
+-                    }
++                    if (remainingTicks <= 0) finish();
+                 });
+             });
+         }
+@@ -151,6 +217,9 @@ class CollectBlock {
+         this.bot = bot;
+         this.targets = new Targets_1.Targets(bot);
+         this.movements = new mineflayer_pathfinder_1.Movements(bot);
++        this._collecting = false;
++        this._cancelRequested = false;
++        this._cancelPromise = null;
+     }
+     /**
+        * If target is a block:
+@@ -181,6 +250,7 @@ class CollectBlock {
+                 ignoreNoPath: (_b = options.ignoreNoPath) !== null && _b !== void 0 ? _b : false,
+                 chestLocations: (_c = options.chestLocations) !== null && _c !== void 0 ? _c : this.chestLocations,
+                 itemFilter: (_d = options.itemFilter) !== null && _d !== void 0 ? _d : this.itemFilter,
++                canStoreTarget: options.canStoreTarget,
+                 targets: this.targets
+             };
+             if (this.bot.pathfinder == null) {
+@@ -190,12 +260,12 @@ class CollectBlock {
                  throw (0, Util_1.error)('UnresolvedDependency', 'The mineflayer-collectblock plugin relies on the mineflayer-tool plugin to run!');
              }
              if (this.movements != null) {
@@ -28,3 +166,66 @@ diff --git a/node_modules/mineflayer-collectblock/lib/CollectBlock.js b/node_mod
                  this.bot.pathfinder.setMovements(this.movements);
              }
              if (!optionsFull.append)
+                 yield this.cancelTask();
++            this._collecting = true;
++            this._cancelRequested = false;
+             if (Array.isArray(target)) {
+                 this.targets.appendTargets(target);
+             }
+@@ -213,6 +283,8 @@ class CollectBlock {
+                     throw err;
+             }
+             finally {
++                this._collecting = false;
++                this._cancelRequested = false;
+                 // @ts-expect-error
+                 this.bot.emit('collectBlock_finished');
+             }
+@@ -237,17 +309,44 @@ class CollectBlock {
+      */
+     cancelTask(cb) {
+         return __awaiter(this, void 0, void 0, function* () {
+-            if (this.targets.empty) {
++            if (!this._collecting) {
+                 if (cb != null)
+                     cb();
+                 return yield Promise.resolve();
+             }
+-            this.bot.pathfinder.stop();
++            if (this._cancelPromise != null) {
++                if (cb != null) {
++                    // @ts-expect-error
++                    this.bot.once('collectBlock_finished', cb);
++                }
++                return yield this._cancelPromise;
++            }
++            // Subscribe before stopping so a synchronous finish cannot be missed.
++            const finished = (0, events_1.once)(this.bot, 'collectBlock_finished');
++            this._cancelPromise = finished.finally(() => {
++                this._cancelPromise = null;
++            });
++            this._cancelRequested = true;
++            this.targets.clear();
++            try {
++                this.bot.pathfinder.stop();
++            }
++            catch (err) {
++                console.warn('[collectblock] pathfinder.stop failed during cancel:', err);
++            }
++            if (typeof this.bot.stopDigging === 'function') {
++                try {
++                    this.bot.stopDigging();
++                }
++                catch (err) {
++                    console.warn('[collectblock] stopDigging failed during cancel:', err);
++                }
++            }
+             if (cb != null) {
+                 // @ts-expect-error
+                 this.bot.once('collectBlock_finished', cb);
+             }
+-            yield (0, events_1.once)(this.bot, 'collectBlock_finished');
++            return yield this._cancelPromise;
+         });
+     }
+ }

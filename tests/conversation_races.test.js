@@ -64,17 +64,18 @@ test('restarting a conversation prevents the old decision from scheduling', asyn
     assert.deepEqual(responses, [{ sender: 'OtherBot', message: '(FROM OTHER BOT)new' }]);
 });
 
-test('a newer message supersedes a slower response decision', async t => {
-    const decision = deferred();
-    let requests = 0;
-    setup(t, { prompter: { promptShouldRespondToBot: () => ++requests === 1 ? decision.promise : Promise.resolve(false) } });
-    const pending = manager.receiveFromBot('OtherBot', { message: 'first', start: true });
+test('a busy agent answers a conversation after the action finishes', async t => {
+    const { agent, responses } = setup(t);
+    await manager.receiveFromBot('OtherBot', { message: 'first', start: true });
     await manager.receiveFromBot('OtherBot', { message: 'second' });
-    decision.resolve(true);
-    await pending;
     const convo = manager._getConvo('OtherBot');
-    assert.equal(convo.inMessageTimer, null);
+    assert.ok(convo.inMessageTimer);
+    assert.deepEqual(responses, []);
     assert.deepEqual(convo.in_queue.map(pack => pack.message), ['first', 'second']);
+
+    agent.isIdle = () => true;
+    await new Promise(resolve => setTimeout(resolve, 1100));
+    assert.deepEqual(responses, [{ sender: 'OtherBot', message: '(FROM OTHER BOT)first\nsecond' }]);
 });
 
 test('ending during a self-prompter pause cannot schedule an inbound response', async t => {

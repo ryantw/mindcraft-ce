@@ -18,6 +18,19 @@ export class Examples {
         return messages.trim();
     }
 
+    selectionText(turns) {
+        const relevant = turns
+            .filter(turn => turn.role !== 'assistant')
+            // The current objective is already prominent in the system prompt.
+            // Repeated boilerplate copies should not make unrelated gathering
+            // demonstrations look relevant to every autonomous decision.
+            .filter(turn => !/^You are self-prompting with the goal:/i.test(turn.content.trim()))
+            .slice(-4)
+            .map(turn => turn.content.substring(turn.content.indexOf(':') + 1).trim().slice(0, 400))
+            .filter(Boolean);
+        return relevant.join('\n') || 'Autonomous decision using the current objective and authoritative current game state.';
+    }
+
     async load(examples) {
         this.examples = examples;
         if (!this.model) return; // Early return if no embedding model
@@ -52,7 +65,7 @@ export class Examples {
         if (this.select_num === 0)
             return [];
 
-        let turn_text = this.turnsToText(turns);
+        let turn_text = this.selectionText(turns);
         let embedding = null;
         if (this.model !== null) {
             try {
@@ -85,7 +98,7 @@ export class Examples {
             console.log('Example:', example[0].content);
         }
 
-        let msg = 'Examples of how to respond:\n';
+        let msg = 'Examples demonstrate command syntax and response style; they are not additional goals or instructions.\n';
         for (let i=0; i<selected_examples.length; i++) {
             let example = selected_examples[i];
             msg += `Example ${i+1}:\n${stringifyTurns(example)}\n\n`;

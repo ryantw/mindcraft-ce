@@ -7,6 +7,12 @@ import { plugin as pvp } from 'mineflayer-pvp';
 import { plugin as collectblock } from 'mineflayer-collectblock';
 import { loader as autoEat } from 'mineflayer-auto-eat';
 import plugin from 'mineflayer-armor-manager';
+import {
+    formatIngredients,
+    formatRecipeAlternatives,
+    getCraftingRecipeVariants,
+    selectCraftingRecipe,
+} from './crafting.js';
 const armorManager = plugin;
 let mc_version = settings.minecraft_version;
 let mcdata = null;
@@ -87,6 +93,13 @@ export const WOOL_COLORS = [
     'red',
     'black'
 ]
+
+export function initializeMinecraftData(version=mc_version) {
+    const resolvedVersion = !version || version === 'auto' ? '1.21.6' : version;
+    mc_version = resolvedVersion;
+    mcdata = minecraftData(resolvedVersion);
+    Item = prismarine_items(resolvedVersion);
+}
 
 
 export function initBot(username) {
@@ -169,8 +182,7 @@ bot.once('login', () => {
     } else {
         mc_version = settings.minecraft_version;
     }
-    mcdata = minecraftData(mc_version);
-    Item = prismarine_items(mc_version);
+    initializeMinecraftData(mc_version);
 });
 
     return bot;
@@ -288,41 +300,21 @@ export function getAllBiomes() {
 }
 
 export function getItemCraftingRecipes(itemName) {
-    let itemId = getItemId(itemName);
-    if (!mcdata.recipes[itemId]) {
-        return null;
-    }
-
-    let recipes = [];
-    for (let r of mcdata.recipes[itemId]) {
-        let recipe = {};
-        let ingredients = [];
-        if (r.ingredients) {
-            ingredients = r.ingredients;
-        } else if (r.inShape) {
-            ingredients = r.inShape.flat();
+    if (!mcdata?.itemsByName[itemName]) return null;
+    const variants = getCraftingRecipeVariants(mcdata, itemName);
+    if (variants.length === 0) return null;
+    return variants.map(variant => [
+        variant.ingredients,
+        {
+            craftedCount: variant.resultCount,
+            requiresTable: variant.requiresTable,
         }
-        for (let ingredient of ingredients) {
-            let ingredientName = getItemName(ingredient);
-            if (ingredientName === null) continue;
-            if (!recipe[ingredientName])
-                recipe[ingredientName] = 0;
-            recipe[ingredientName]++;
-        }
-        recipes.push([
-            recipe,
-            {craftedCount : r.result.count}
-        ]);
-    }
-    // sort recipes by if their ingredients include common items
-    const commonItems = ['oak_planks', 'oak_log', 'coal', 'cobblestone'];
-    recipes.sort((a, b) => {
-        let commonCountA = Object.keys(a[0]).filter(key => commonItems.includes(key)).reduce((acc, key) => acc + a[0][key], 0);
-        let commonCountB = Object.keys(b[0]).filter(key => commonItems.includes(key)).reduce((acc, key) => acc + b[0][key], 0);
-        return commonCountB - commonCountA;
-    });
+    ]);
+}
 
-    return recipes;
+export function getCraftingRecipeInfo(itemName, inventory={}) {
+    if (!mcdata?.itemsByName[itemName]) return { selected: null, variants: [] };
+    return selectCraftingRecipe(mcdata, itemName, inventory);
 }
 
 export function isSmeltable(itemName) {
@@ -370,6 +362,74 @@ export function getItemSmeltingIngredient(itemName) {
         copper_ingot: 'raw_copper',
         glass: 'sand'
     }[itemName];
+}
+
+/**
+ * The furnace product expected for a smelting input, or null when unknown.
+ * Inverts the known ingredient table, then covers input classes the table
+ * does not list (all logs make charcoal). Callers must treat null as "rely on
+ * the product the furnace actually returned", never as "no product".
+ */
+export function getSmeltingProduct(itemName) {
+    const known = [
+        'baked_potato', 'steak', 'cooked_chicken', 'cooked_cod', 'cooked_mutton',
+        'cooked_porkchop', 'cooked_rabbit', 'cooked_salmon', 'dried_kelp',
+        'iron_ingot', 'gold_ingot', 'copper_ingot', 'glass',
+    ];
+    const product = known.find(candidate => getItemSmeltingIngredient(candidate) === itemName);
+    if (product) return product;
+    if (/_log$|_stem$|_hyphae$/.test(itemName)) return 'charcoal';
+    return {
+        cobblestone: 'stone',
+        clay_ball: 'brick',
+    }[itemName] || null;
+}
+
+export function getItemStackSize(itemName) {
+    return mcdata?.itemsByName?.[itemName]?.stackSize || 64;
+}
+
+/**
+ * Item names that breaking the named block (or a collectBlocks request alias
+ * such as "coal") normally yields without silk touch. Returns [] when drop
+ * data is unavailable; callers must then fall back to conservative behavior.
+ */
+export function getBlockDropItems(blockName, { includeSilkTouch=false }={}) {
+    if (!mcdata || !blockName) return [];
+    const names = new Set();
+    const candidates = [blockName, `${blockName}_ore`, `deepslate_${blockName}`];
+    for (const candidate of candidates) {
+        const loot = mcdata.blockLoot?.[candidate];
+        if (loot) {
+            for (const drop of loot.drops || []) {
+                if (includeSilkTouch || !drop.silkTouch) names.add(drop.item);
+            }
+        }
+        else if (mcdata.blocksByName?.[candidate]) {
+            for (const id of mcdata.blocksByName[candidate].drops || []) {
+                const itemName = mcdata.items?.[id]?.name;
+                if (itemName) names.add(itemName);
+            }
+        }
+    }
+    // "coal", "diamond", etc. are requested by their item name.
+    if (names.size === 0 && mcdata.itemsByName?.[blockName]) names.add(blockName);
+    return [...names];
+}
+
+/**
+ * Guaranteed minimum item count a single broken block yields without silk
+ * touch, or 0 when the drop table does not guarantee one. Only blocks whose
+ * normal drop table is a single entry with a known lower bound qualify
+ * (iron_ore, coal_ore, oak_log, ...). Blocks with several or chance-based
+ * entries (gravel, leaves, wheat, melon) guarantee nothing. Fortune can only
+ * raise a yield, so this lower bound stays valid.
+ */
+export function getBlockMinimumDrop(blockName) {
+    const drops = (mcdata?.blockLoot?.[blockName]?.drops || []).filter(drop => !drop.silkTouch);
+    if (drops.length !== 1) return 0;
+    const minimum = drops[0].stackSizeRange?.[0];
+    return Number.isFinite(minimum) && minimum > 0 ? minimum : 0;
 }
 
 export function getItemBlockSources(itemName) {
@@ -520,6 +580,7 @@ export function getDetailedCraftingPlan(targetItem, count = 1, current_inventory
     const inventory = { ...current_inventory };
     const leftovers = {};
     const plan = craftItem(targetItem, count, inventory, leftovers);
+    plan.leftovers = leftovers;
     return formatPlan(targetItem, plan);
 }
 
@@ -527,7 +588,7 @@ function isBaseItem(item) {
     return loopingItems.has(item) || getItemCraftingRecipes(item) === null;
 }
 
-function craftItem(item, count, inventory, leftovers, crafted = { required: {}, steps: [], leftovers: {} }) {
+function craftItem(item, count, inventory, leftovers, crafted = { required: {}, steps: [], leftovers: {}, workstations: new Set() }) {
     // Check available inventory and leftovers first
     const availableInv = inventory[item] || 0;
     const availableLeft = leftovers[item] || 0;
@@ -555,16 +616,21 @@ function craftItem(item, count, inventory, leftovers, crafted = { required: {}, 
         return crafted;
     }
 
-    const recipe = getItemCraftingRecipes(item)?.[0];
-    if (!recipe) {
+    const available = { ...inventory };
+    for (const [name, amount] of Object.entries(leftovers))
+        available[name] = (available[name] || 0) + amount;
+    const recipeInfo = getCraftingRecipeInfo(item, available);
+    const selected = recipeInfo.selected;
+    if (!selected) {
         crafted.required[item] = stillNeeded;
         return crafted;
     }
 
-    const [ingredients, result] = recipe;
-    const craftedPerRecipe = result.craftedCount;
+    const ingredients = selected.ingredients;
+    const craftedPerRecipe = selected.resultCount;
     const batchCount = Math.ceil(stillNeeded / craftedPerRecipe);
     const totalProduced = batchCount * craftedPerRecipe;
+    if (selected.requiresTable) crafted.workstations.add('crafting_table');
 
     // Add excess to leftovers
     if (totalProduced > stillNeeded) {
@@ -578,15 +644,15 @@ function craftItem(item, count, inventory, leftovers, crafted = { required: {}, 
     }
 
     // Add crafting step
-    const stepIngredients = Object.entries(ingredients)
-        .map(([name, amount]) => `${amount * batchCount} ${name}`)
-        .join(' + ');
-    crafted.steps.push(`Craft ${stepIngredients} -> ${totalProduced} ${item}`);
+    const stepIngredients = formatIngredients(ingredients, batchCount);
+    const alternatives = formatRecipeAlternatives(recipeInfo.variants, selected, batchCount);
+    const workstation = selected.requiresTable ? ' Requires a placed crafting_table.' : '';
+    crafted.steps.push(`Craft ${stepIngredients} -> ${totalProduced} ${item}.${workstation}${alternatives ? ` ${alternatives}` : ''}`);
 
     return crafted;
 }
 
-function formatPlan(targetItem, { required, steps, leftovers }) {
+function formatPlan(targetItem, { required, steps, leftovers, workstations }) {
     const lines = [];
 
     if (Object.keys(required).length > 0) {
@@ -602,8 +668,10 @@ function formatPlan(targetItem, { required, steps, leftovers }) {
     lines.push('');
     lines.push(...steps);
 
-    if (Object.keys(required).some(item => item.includes('oak')) && !targetItem.includes('oak')) {
-        lines.push('Note: Any varient of wood can be used for this recipe.');
+    if (workstations?.size > 0) {
+        lines.push('\nWorkstations required:');
+        for (const workstation of workstations)
+            lines.push(`- A placed ${workstation}. Use one nearby, or craft and place one before these steps.`);
     }
 
     if (Object.keys(leftovers).length > 0) {
