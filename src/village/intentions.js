@@ -34,6 +34,22 @@ export function readIntentions(dataRoot) {
     };
 }
 
+/**
+ * One private reconsideration of a goal that was already active.
+ * Later intention updates keep this field. It is not a new goal.
+ */
+export function noteMilestoneReview(dataRoot, { decision, priorText = '', now = () => new Date().toISOString() } = {}) {
+    const store = readIntentions(dataRoot);
+    if (store.milestone_review) return { noted: false, intentions: store };
+    store.milestone_review = {
+        at: now(),
+        decision: String(decision || ''),
+        prior_text: String(priorText || '').slice(0, 180),
+    };
+    writeAtomic(fileOf(dataRoot), store);
+    return { noted: true, intentions: store };
+}
+
 function clip(text, max) {
     return String(text || '').replace(/!\w+(?:\([^)]*\))?/g, '').replace(/\s+/g, ' ').trim().slice(0, max);
 }

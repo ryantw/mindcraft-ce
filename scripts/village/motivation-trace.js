@@ -1,6 +1,6 @@
 /**
  * Disposable motivation trace. Uses local qwen3:14b.
- * Goal selection and planning think. The result is printed.
+ * Goal selection uses think false. Planning in this trace still thinks. The result is printed.
  * Writes only a temporary directory. Does not connect to Village Alpha
  * and does not read or write runtime/scenarios/village-alpha.
  *
@@ -68,7 +68,7 @@ const goalResult = await chooseCurrentGoal(root, {
     complete: (prompt) => model.complete(
         prompt,
         'Choose a goal from the notes. Return only the JSON object. Do not invent events.',
-        { think: true, timeout_ms: 180000, max_predict: 1024, options: { num_predict: 1024 } }
+        { think: false, timeout_ms: 120000, max_predict: 512, options: { num_predict: 512 } }
     ).then(response => response?.content || ''),
 });
 
@@ -160,7 +160,7 @@ const night = {
 const report = {
     temp_dir: root,
     model: 'qwen3:14b',
-    goal_selection_think: true,
+    goal_selection_think: false,
     planning_think: true,
     ambition,
     goal_result: { chosen: goalResult.chosen, goal: goalResult.goal || null, reason: goalResult.reason || null, raw: goalResult.raw || null },

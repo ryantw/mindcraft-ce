@@ -1,72 +1,189 @@
-import { readFileSync, existsSync } from 'fs';
-import path from 'path';
 import settings from '../agent/settings.js';
 import { activeAmbitionText, ensureSeededAmbition, readAmbitions } from './ambitions.js';
-import { activeIntentionText, readIntentions, updateIntention } from './intentions.js';
-import { readEpisodes } from './episodes.js';
-import { readKnowledge } from './knowledge.js';
-import { readRelationships } from './relationships.js';
+import { milestoneNotes } from './goal_context.js';
+import { activeIntentionText, noteMilestoneReview, readIntentions, updateIntention } from './intentions.js';
 import { autonomyPausedForNight, nightPhase } from './night.js';
+
+export const GOAL_SYSTEM = 'Return only a JSON object. {"goal":null} is a real decline. An empty or cut-off reply is not a decline.';
+
+export const GOAL_MODEL_PARAMS = {
+    think: false,
+    timeout_ms: 120000,
+    max_predict: 512,
+    options: { num_predict: 512 },
+};
+
+const CHOICE_INSTRUCTIONS = [
+    'Choose one meaningful, achievable personal milestone for this stretch of your life, or decline.',
+    'A milestone is a result you could reach and later recognize. It is not the next physical action.',
+    'Inspecting a furnace, checking a chest, examining a tool, walking to a spot you already know, or announcing what you are about to do are steps toward a milestone. They are not the milestone.',
+    'You may imagine a future possibility. You may aim to construct something that does not exist yet, to explore a location you have not visited, or to form a new personal aspiration.',
+    'Do not invent a past event, an item, a relationship, or a feature of the world that is not written in these notes. If you have not visited a place, do not claim you already know what is there.',
+    'If you do not want a milestone, return {"goal":null}. Use that only for a genuine decline.',
+    'Return only JSON: {"goal":null} or {"goal":"one sentence"}.',
+].join('\n');
+
+const REVIEW_INSTRUCTIONS = [
+    'You already have a current goal. Decide privately whether it is a meaningful milestone toward your ambition, or only a next action.',
+    'Inspecting a furnace, checking a chest, examining a tool, or announcing the action are steps. They are not the milestone.',
+    'You may imagine a future possibility, including something that does not exist yet. Do not invent a past event, an item, a relationship, or a feature of the world that is not written in these notes.',
+    'retain: the current goal is worth continuing. Set goal to null.',
+    'revise: replace it with one milestone. Set goal to the new sentence.',
+    'abandon: stop it. Set goal to a different milestone, or null if you do not want one now.',
+    'Return only JSON: {"decision":"retain"|"revise"|"abandon","goal":null}.',
+    'An empty or cut-off reply is not a decision to keep or drop the goal.',
+].join('\n');
+
+const CORRECTION = 'The previous reply was empty, cut off, or not the required JSON object. Return only the JSON object.';
 
 function clip(text, max) {
     return String(text || '').replace(/\s+/g, ' ').trim().slice(0, max);
 }
 
 /**
- * A private chance to choose today's goal. No command catalog.
- * The model may decline. The engine does not invent the goal.
+ * A private chance to choose a milestone. No command catalog.
+ * The model may decline with {"goal":null}. The engine does not invent the goal.
  */
-export function goalSelectionPrompt(dataRoot) {
-    const identity = existsSync(path.join(dataRoot, 'identity.json'))
-        ? JSON.parse(readFileSync(path.join(dataRoot, 'identity.json'), 'utf8'))
-        : {};
-    const ambition = activeAmbitionText(readAmbitions(dataRoot));
-    const knowledge = readKnowledge(dataRoot);
-    const episodes = (readEpisodes(dataRoot).episodes || []).slice(-4);
-    const people = Object.keys(readRelationships(dataRoot).relationships || {}).slice(0, 6);
-    const lines = [
-        `You are ${identity.name || 'yourself'}. Choose one concrete goal for the current stretch of the day, or none.`,
-        'The goal should follow your ambition and what you actually know. Do not invent a place, a material, a person, or an event that is not in these notes.',
-        'A goal is one achievable aim, not a schedule and not a list of commands.',
-    ];
-    if (identity.temperament?.length) lines.push(`Temperament: ${clip(identity.temperament.join(' '), 240)}`);
-    if (identity.interests?.length) lines.push(`Interests: ${clip(identity.interests.join(', '), 200)}`);
-    if (ambition) lines.push(`Long-term ambition: ${clip(ambition, 240)}`);
-    const places = [];
-    if (knowledge?.home) places.push('home');
-    for (const place of knowledge?.public_places || []) {
-        if (place?.id) places.push(place.id);
-    }
-    if (places.length) lines.push(`Places you already know: ${places.join(', ')}.`);
-    if (people.length) lines.push(`People in your own notes: ${people.join(', ')}.`);
-    for (const episode of episodes) {
-        if (episode?.text) lines.push(`Recent: ${clip(episode.text, 160)}`);
-    }
-    lines.push('Return only JSON: {"goal":null} or {"goal":"one sentence"}.');
-    return lines.join('\n');
+export function goalSelectionPrompt(dataRoot, options = {}) {
+    return [CHOICE_INSTRUCTIONS, milestoneNotes(dataRoot, options)].join('\n');
 }
 
-export async function chooseCurrentGoal(dataRoot, { complete, now = () => new Date().toISOString() } = {}) {
+/**
+ * One review of a goal that is already active. The model may keep, replace, or close it.
+ */
+export function goalReviewPrompt(dataRoot, options = {}) {
+    const current = activeIntentionText(readIntentions(dataRoot));
+    return [
+        REVIEW_INSTRUCTIONS,
+        `Current goal: ${clip(current, 180) || 'none'}`,
+        milestoneNotes(dataRoot, options),
+    ].join('\n');
+}
+
+export function parseGoalChoice(text, doneReason = '') {
+    const raw = String(text || '').trim();
+    if (!raw) return { status: 'failed', reason: doneReason === 'length' ? 'truncated' : 'empty' };
+    const start = raw.indexOf('{');
+    const end = raw.lastIndexOf('}');
+    if (start < 0 || end <= start) return { status: 'failed', reason: doneReason === 'length' ? 'truncated' : 'malformed' };
+    let parsed;
+    try {
+        parsed = JSON.parse(raw.slice(start, end + 1));
+    } catch {
+        return { status: 'failed', reason: 'malformed' };
+    }
+    if (!parsed || !Object.prototype.hasOwnProperty.call(parsed, 'goal')) {
+        return { status: 'failed', reason: 'malformed' };
+    }
+    if (parsed.goal === null) return { status: 'declined', goal: null };
+    if (typeof parsed.goal === 'string' && clip(parsed.goal, 180)) {
+        return { status: 'goal', goal: clip(parsed.goal, 180) };
+    }
+    return { status: 'failed', reason: 'malformed' };
+}
+
+export function parseGoalReview(text, doneReason = '') {
+    const raw = String(text || '').trim();
+    if (!raw) return { status: 'failed', reason: doneReason === 'length' ? 'truncated' : 'empty' };
+    const start = raw.indexOf('{');
+    const end = raw.lastIndexOf('}');
+    if (start < 0 || end <= start) return { status: 'failed', reason: doneReason === 'length' ? 'truncated' : 'malformed' };
+    let parsed;
+    try {
+        parsed = JSON.parse(raw.slice(start, end + 1));
+    } catch {
+        return { status: 'failed', reason: 'malformed' };
+    }
+    const decision = String(parsed?.decision || '').trim();
+    if (!['retain', 'revise', 'abandon'].includes(decision)) {
+        return { status: 'failed', reason: 'malformed' };
+    }
+    const goal = typeof parsed.goal === 'string' ? clip(parsed.goal, 180) : null;
+    if (decision === 'revise' && !goal) return { status: 'failed', reason: 'malformed' };
+    return { status: 'decision', decision, goal };
+}
+
+function responseOf(value) {
+    if (typeof value === 'string') return { content: value, done_reason: '' };
+    return { content: value?.content || '', done_reason: value?.done_reason || '' };
+}
+
+async function requestParsed(complete, prompt, parse) {
+    let attempts = 0;
+    let raw = '';
+    let parsed = { status: 'failed', reason: 'empty' };
+    for (let attempt = 0; attempt < 2; attempt++) {
+        const asked = attempt === 0 ? prompt : `${prompt}\n${CORRECTION}`;
+        attempts += 1;
+        try {
+            const response = responseOf(await complete(asked));
+            raw = response.content;
+            parsed = parse(response.content, response.done_reason);
+        } catch (error) {
+            raw = '';
+            parsed = { status: 'failed', reason: 'empty', message: error.message };
+        }
+        if (parsed.status !== 'failed') break;
+    }
+    return { parsed, attempts, raw };
+}
+
+export async function chooseCurrentGoal(dataRoot, { complete, now = () => new Date().toISOString(), inventory } = {}) {
     if (!dataRoot || activeIntentionText(readIntentions(dataRoot))) return { chosen: false, reason: 'has goal' };
     if (typeof complete !== 'function') return { chosen: false, reason: 'no model' };
-    let text = '';
-    try {
-        text = await complete(goalSelectionPrompt(dataRoot));
-    } catch (error) {
-        return { chosen: false, reason: error.message };
+    const { parsed, attempts, raw } = await requestParsed(
+        complete,
+        goalSelectionPrompt(dataRoot, { inventory }),
+        parseGoalChoice,
+    );
+    if (parsed.status === 'declined') return { chosen: false, reason: 'declined', raw, attempts };
+    if (parsed.status !== 'goal') return { chosen: false, reason: 'generation_failed', failure: parsed.reason, raw, attempts };
+    const saved = updateIntention(dataRoot, { action: 'revise', text: parsed.goal, source: 'reflection', now });
+    if (!saved.ok) return { chosen: false, reason: saved.reason, raw, attempts };
+    noteMilestoneReview(dataRoot, { decision: 'selected', priorText: parsed.goal, now });
+    return { chosen: true, goal: parsed.goal, intentions: readIntentions(dataRoot), attempts };
+}
+
+/**
+ * Ask once about a goal that was already active. A failed reply leaves the goal in place.
+ * The experimental sample goals are not written here.
+ */
+export async function reconsiderCurrentGoal(dataRoot, { complete, now = () => new Date().toISOString(), inventory } = {}) {
+    const current = activeIntentionText(readIntentions(dataRoot));
+    if (!current) return { reviewed: false, reason: 'no goal' };
+    if (readIntentions(dataRoot).milestone_review) return { reviewed: false, reason: 'already reviewed' };
+    if (typeof complete !== 'function') return { reviewed: false, reason: 'no model' };
+    const { parsed, attempts, raw } = await requestParsed(
+        complete,
+        goalReviewPrompt(dataRoot, { inventory }),
+        parseGoalReview,
+    );
+    if (parsed.status !== 'decision') {
+        return { reviewed: false, reason: 'generation_failed', failure: parsed.reason, raw, attempts };
     }
-    let goal = null;
-    try {
-        const start = String(text).indexOf('{');
-        const end = String(text).lastIndexOf('}');
-        const parsed = JSON.parse(String(text).slice(start, end + 1));
-        goal = typeof parsed.goal === 'string' ? clip(parsed.goal, 180) : null;
-    } catch {
-        goal = null;
+    let goal = current;
+    if (parsed.decision === 'revise') {
+        if (parsed.goal === current) {
+            noteMilestoneReview(dataRoot, { decision: 'retain', priorText: current, now });
+            return { reviewed: true, decision: 'retain', goal: current, attempts };
+        }
+        const saved = updateIntention(dataRoot, { action: 'revise', text: parsed.goal, source: 'reflection', now });
+        if (!saved.ok) return { reviewed: false, reason: saved.reason, raw, attempts };
+        goal = activeIntentionText(readIntentions(dataRoot));
+    } else if (parsed.decision === 'abandon') {
+        const closed = updateIntention(dataRoot, { action: 'abandon', text: 'Closed after a private review.', source: 'reflection', now });
+        if (!closed.ok) return { reviewed: false, reason: closed.reason, raw, attempts };
+        if (parsed.goal && parsed.goal !== current) {
+            const saved = updateIntention(dataRoot, { action: 'revise', text: parsed.goal, source: 'reflection', now });
+            if (!saved.ok) {
+                noteMilestoneReview(dataRoot, { decision: 'abandon', priorText: current, now });
+                return { reviewed: true, decision: 'abandon', goal: '', attempts, replacementFailed: saved.reason };
+            }
+        }
+        goal = activeIntentionText(readIntentions(dataRoot));
     }
-    if (!goal) return { chosen: false, reason: 'declined', raw: text };
-    const saved = updateIntention(dataRoot, { action: 'revise', text: goal, source: 'reflection', now });
-    return saved.ok ? { chosen: true, goal, intentions: saved.intentions } : { chosen: false, reason: saved.reason };
+    noteMilestoneReview(dataRoot, { decision: parsed.decision, priorText: current, now });
+    return { reviewed: true, decision: parsed.decision === 'revise' && goal === current ? 'retain' : parsed.decision, goal, attempts };
 }
 
 export function syncPlanToGoal(planManager, goal) {
@@ -224,6 +341,25 @@ async function evaluateFinishedPlan(agent, dataRoot, goal) {
     return true;
 }
 
+function handsFromBot(bot) {
+    if (typeof bot?.inventory?.items !== 'function') return undefined;
+    const counts = {};
+    try {
+        for (const item of bot.inventory.items()) {
+            if (!item?.name) continue;
+            counts[item.name] = (counts[item.name] || 0) + (item.count || 0);
+        }
+    } catch {
+        return undefined;
+    }
+    return counts;
+}
+
+function modelComplete(agent) {
+    if (!agent?.prompter?.chat_model?.complete) return null;
+    return (prompt) => agent.prompter.chat_model.complete(prompt, GOAL_SYSTEM, GOAL_MODEL_PARAMS);
+}
+
 /**
  * Daytime direction for one decision. Night returns paused so the sleep
  * mode, not another model call, owns the body.
@@ -234,18 +370,36 @@ export async function prepareVillageTurn(agent) {
     const root = settings.agent_data_root;
     if (!root) return { paused: false, ambition: '', goal: '', step: '' };
     ensureSeededAmbition(root, settings.profile?.ambition_seed);
-    if (!activeIntentionText(readIntentions(root))) {
-        const wait = agent._goalNextAt || 0;
-        if (Date.now() >= wait && agent.prompter?.chat_model?.complete) {
-            const result = await chooseCurrentGoal(root, {
-                complete: (prompt) => agent.prompter.chat_model.complete(
-                    prompt,
-                    'Choose a goal from the notes. Return only the JSON object. Do not invent events.',
-                    { think: true, timeout_ms: 180000, max_predict: 1024, options: { num_predict: 1024 } }
-                ).then(response => response?.content || ''),
-            });
-            if (!result.chosen) agent._goalNextAt = Date.now() + 60000;
-            else console.log(`[${agent.name}] Chose a current goal: ${result.goal}`);
+    const complete = modelComplete(agent);
+    const inventory = handsFromBot(agent?.bot);
+    const wait = agent._goalNextAt || 0;
+    const ready = Date.now() >= wait && complete;
+    if (ready && activeIntentionText(readIntentions(root)) && !readIntentions(root).milestone_review) {
+        const review = await reconsiderCurrentGoal(root, { complete, inventory });
+        if (!review.reviewed) {
+            if (review.reason === 'generation_failed') {
+                agent._goalNextAt = Date.now() + 60000;
+                console.warn(`[${agent.name}] Goal review did not return a decision. The current goal stays. This was not a choice to keep or drop it.`);
+            }
+        } else if (review.decision === 'retain') {
+            console.log(`[${agent.name}] Kept the current goal: ${review.goal}`);
+        } else if (review.decision === 'revise') {
+            console.log(`[${agent.name}] Revised the current goal: ${review.goal}`);
+        } else if (review.decision === 'abandon') {
+            console.log(`[${agent.name}] Closed the current goal.${review.goal ? ` Next goal: ${review.goal}` : ''}`);
+        }
+    }
+    if (ready && !activeIntentionText(readIntentions(root))) {
+        const result = await chooseCurrentGoal(root, { complete, inventory });
+        if (!result.chosen) {
+            agent._goalNextAt = Date.now() + 60000;
+            if (result.reason === 'generation_failed') {
+                console.warn(`[${agent.name}] Goal selection did not return a usable goal. This was not a decline.`);
+            } else if (result.reason === 'declined') {
+                console.log(`[${agent.name}] Declined a current goal.`);
+            }
+        } else {
+            console.log(`[${agent.name}] Chose a current goal: ${result.goal}`);
         }
     }
     await evaluateFinishedPlan(agent, root, activeIntentionText(readIntentions(root)));
