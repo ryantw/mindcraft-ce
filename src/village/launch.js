@@ -32,6 +32,7 @@ export function buildAgentSettings(bundle, profile, survivalSettings, { runtimeR
         name: profile.name,
         model: structuredClone(profile.model || scenario.models.day),
         embedding: profile.embedding || DEFAULT_EMBEDDING,
+        ambition_seed: profile.ambition_seed || null,
     };
     return settings;
 }

@@ -56,8 +56,10 @@ export class Ollama {
             numCtx: params.options?.num_ctx,
         });
 
+        const thinking = typeof apiResponse?.message?.thinking === 'string' ? apiResponse.message.thinking : '';
         return {
             content: extractFinalAnswer(apiResponse),
+            thinking,
             done_reason: apiResponse?.done_reason || null,
             eval_count: apiResponse?.eval_count ?? null,
             prompt_eval_count: apiResponse?.prompt_eval_count ?? null
@@ -279,6 +281,11 @@ export function formatOllamaMetrics({
         `duration_ms=${durationMs(response, startedAt)}`,
     ];
     if (error) fields.push(`error=${String(error.message || error).replace(/\s+/g, '_').slice(0, 120)}`);
+    const thinking = typeof response?.message?.thinking === 'string' ? response.message.thinking : '';
+    if (thinking) {
+        fields.push(`thinking_chars=${thinking.length}`);
+        fields.push(`answer_chars=${String(response?.message?.content || '').length}`);
+    }
     return fields.join(' ');
 }
 

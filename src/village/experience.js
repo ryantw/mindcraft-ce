@@ -1,13 +1,13 @@
 import settings from '../agent/settings.js';
 import { appendEpisode } from './episodes.js';
 import { readableRemains } from './remains.js';
-import { distanceBetween, DEFAULT_HEARING_BLOCKS } from './locality.js';
+import { distanceBetween, DEFAULT_HEARING_BLOCKS, stripAddresseeLabels } from './locality.js';
 import { recordDeathKnowledge } from './death.js';
 
 const SKIPPED = new Set([
     'stop', 'stats', 'inventory', 'nearbyBlocks', 'entities', 'goToCoordinates',
     'goToPlayer', 'moveAway', 'followPlayer', 'lookAt', 'searchWiki', 'goal', 'endGoal',
-    'mode', 'stance',
+    'mode', 'stance', 'intention',
 ]);
 
 const LABELS = {
@@ -31,7 +31,7 @@ function commandLabel(commandName) {
 }
 
 function plain(text) {
-    return String(text || '').replace(/!\w+(\([^)]*\))?/g, '').replace(/\s+/g, ' ').trim().slice(0, 160);
+    return stripAddresseeLabels(String(text || '').replace(/!\w+(\([^)]*\))?/g, '')).replace(/\s+/g, ' ').trim().slice(0, 160);
 }
 
 /**

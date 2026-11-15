@@ -1,6 +1,6 @@
 import test, { describe, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import rootSettings from '../settings.js';
@@ -151,5 +151,45 @@ describe('planner uses a budget large enough for a build plan', () => {
         assert.equal(calls[0].params.timeout_ms, 120000);
         assert.equal(calls[0].params.think, false);
         assert.match(calls[0].system, /Plan\. no_active_plan No plan\. CONTEXT/);
+    });
+
+    test('a village goal is planned without thinking and keeps the JSON plan shape', async () => {
+        const goal = 'Begin planting flowers in the garden beside my house.';
+        const dataRoot = path.join(dir, 'lea');
+        mkdirSync(dataRoot);
+        writeFileSync(path.join(dataRoot, 'intentions.json'), JSON.stringify({
+            schema_version: 1,
+            active: { id: 'int-0001', text: goal, status: 'pursuing', source: 'reflection' },
+            history: [],
+        }));
+        writeFileSync(path.join(dataRoot, 'ambitions.json'), JSON.stringify({
+            schema_version: 1,
+            active: { id: 'amb-0001', text: 'A garden beside the house.', status: 'active', source: 'seed' },
+            history: [],
+        }));
+        setSettings({ ...rootSettings, village_autonomy: true, agent_data_root: dataRoot });
+        const calls = [];
+        const plan = { objective: 'something else', steps: [{ id: 'a', action: { name: 'collectBlocks', params: { type: 'dandelion', num: 1 } } }] };
+        const fake = {
+            agent: { name: 'Lea', plan_manager: { enabled: true, formatForPrompt: () => 'No plan.', planningContext: () => 'CONTEXT' } },
+            profile: { planning: 'Plan. $PLAN_REASON $PREVIOUS_PLAN $PLAN_CONTEXT' },
+            checkCooldown: async () => {},
+            replaceStrings: async () => 'Inventory empty.',
+            _saveLog: async () => {},
+            chat_model: {
+                complete: async (user, system, params) => { calls.push({ user, system, params }); return { content: JSON.stringify(plan), done_reason: 'stop', eval_count: 40 }; },
+            },
+        };
+        const proposal = await Prompter.prototype.promptPlanning.call(fake, 'no_active_plan', null, null);
+        assert.equal(proposal.objective, goal);
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].params.think, false);
+        assert.equal(calls[0].params.options.num_predict, 1024);
+        assert.equal(calls[0].params.max_predict, 1024);
+        assert.match(calls[0].user, /current goal is already chosen/);
+        assert.match(calls[0].system, /"steps"/);
+        assert.match(calls[0].system, /CONTEXT/);
+        assert.match(calls[0].system, /Inventory empty/);
+        assert.doesNotMatch(calls[0].system, /choosing your own near-term objective/);
     });
 });

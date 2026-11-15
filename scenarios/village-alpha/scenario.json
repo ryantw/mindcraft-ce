@@ -11,7 +11,7 @@
   "models": {
     "day": {
       "api": "ollama",
-      "model": "qwen3:8b",
+      "model": "qwen3:14b",
       "params": {
         "think": false,
         "keep_alive": -1,
@@ -26,7 +26,7 @@
       "model": "qwen3:14b",
       "params": {
         "think": true,
-        "keep_alive": "45s",
+        "keep_alive": -1,
         "timeout_ms": 180000,
         "max_predict": 1536,
         "options": {

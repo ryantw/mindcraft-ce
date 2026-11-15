@@ -29,7 +29,7 @@ const META_COMMANDS = new Set([
  *   fill_region        - axis-aligned walls, floors and roofs
  */
 const CONSTRUCTION_COMMANDS = [
-    { name: 'placeHere', abilities: ['single_block_here'], summary: 'places ONE block at your current position only (no coordinates, cannot make walls, floors or roofs)' },
+    { name: 'placeHere', abilities: ['single_block_here'], summary: 'places ONE block at your current position only (no coordinates, cannot make walls, floors or roofs). A flower or sapling goes on nearby empty ground and does not replace a path, flower, or other block' },
     { name: 'placeBlockAt', abilities: ['exact_block'], summary: 'places one full solid block (or a door) at exact coordinates; the spot must be empty and touch a solid block' },
     { name: 'buildLine', abilities: ['line'], summary: `builds an axis-aligned line of one block type between two coordinates (at most ${CONSTRUCTION_LIMITS.maxLineLength} blocks)` },
     { name: 'buildPlane', abilities: ['fill_region'], summary: `builds an axis-aligned wall, floor or roof of one block type between two corners (at most ${CONSTRUCTION_LIMITS.maxPlaneBlocks} blocks, ${CONSTRUCTION_LIMITS.maxPlaneSide} per side)` },
@@ -45,6 +45,17 @@ const BUILD_COMMANDS = {
 const STRUCTURE_NOUNS = '(?:shelters?|houses?|huts?|cabins?|homes?|walls?|roofs?|floors?|enclosures?|fort(?:ress)?|towers?|buildings?|structures?|foundations?|barns?|bunkers?)';
 const BUILD_CLAIM = new RegExp(`\\b(?:build|builds|building|construct|constructing|erect|raise|enclose|wall\\s+in|set\\s*up|finish|complete)\\b[^.;]{0,50}\\b${STRUCTURE_NOUNS}\\b`, 'i');
 const STRUCTURE_WORD = new RegExp(`\\b${STRUCTURE_NOUNS}\\b`, 'i');
+const HOUSE_LANDMARK = /\b(?:beside|near|next to|by|outside|in front of|behind|at)\s+(?:my\s+|the\s+)?(?:house|home)\b/i;
+const NON_HOUSE_STRUCTURE = /\b(?:shelters?|huts?|cabins?|walls?|roofs?|floors?|enclosures?|fort(?:ress)?|towers?|buildings?|structures?|foundations?|barns?|bunkers?)\b/i;
+
+/** placeHere may name an existing house as a location. That is not a request to build the house. */
+function placeHereBuildsStructure(description) {
+    const text = String(description || '');
+    if (BUILD_CLAIM.test(text)) return true;
+    if (!STRUCTURE_WORD.test(text)) return false;
+    if (HOUSE_LANDMARK.test(text) && !NON_HOUSE_STRUCTURE.test(text)) return false;
+    return true;
+}
 
 function isBlocked(agent, name) {
     return Array.isArray(agent?.blocked_actions) && agent.blocked_actions.includes(`!${name}`);
@@ -193,7 +204,7 @@ export function checkProposalFeasibility(agent, proposal) {
             );
         }
         steps.forEach((step, index) => {
-            if (stepName(step) === 'placeHere' && (describesStructure(step) || STRUCTURE_WORD.test(String(step?.description || '')))) {
+            if (stepName(step) === 'placeHere' && placeHereBuildsStructure(step?.description)) {
                 problems.push(`step ${step?.id || index + 1} uses !placeHere for part of a structure; !placeHere places a single block at your feet. Use !buildPlane, !buildLine or !placeBlockAt.`);
             }
         });

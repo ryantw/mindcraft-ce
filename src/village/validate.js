@@ -58,7 +58,7 @@ function validateModel(model, label) {
 }
 
 function validateInhabitant(profile, fileLabel) {
-    exactKeys(profile, ['schema_version', 'id', 'name', 'profile_version', 'backstory', 'temperament', 'interests', 'seed_relationships', 'model', 'embedding'], fileLabel);
+    exactKeys(profile, ['schema_version', 'id', 'name', 'profile_version', 'backstory', 'temperament', 'interests', 'seed_relationships', 'model', 'embedding', 'ambition_seed'], fileLabel);
     requireKeys(profile, ['schema_version', 'id', 'name', 'profile_version', 'backstory', 'temperament'], fileLabel);
     if (profile.schema_version !== 1) fail(`${fileLabel} schema_version must be 1.`);
     if (!ID_PATTERN.test(profile.id)) fail(`${fileLabel} id '${profile.id}' must be lowercase words separated by hyphens.`);
@@ -80,6 +80,9 @@ function validateInhabitant(profile, fileLabel) {
     }
     if (profile.interests !== undefined && (!Array.isArray(profile.interests) || profile.interests.some(item => typeof item !== 'string' || !item.trim()))) {
         fail(`${fileLabel} interests must be a list of strings.`);
+    }
+    if (profile.ambition_seed !== undefined && (typeof profile.ambition_seed !== 'string' || !profile.ambition_seed.trim())) {
+        fail(`${fileLabel} ambition_seed must be a sentence. It is not copied over an ambition the inhabitant already has.`);
     }
     if (profile.seed_relationships !== undefined && !Array.isArray(profile.seed_relationships)) {
         fail(`${fileLabel} seed_relationships must be a list.`);

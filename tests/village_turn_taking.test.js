@@ -1,20 +1,24 @@
 import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync, rmSync } from 'fs';
+import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'fs';
 import os from 'os';
 import path from 'path';
 import { setSettings } from '../src/agent/settings.js';
 import { Agent } from '../src/agent/agent.js';
 import { SelfPrompter } from '../src/agent/self_prompter.js';
 import { Prompter } from '../src/models/prompter.js';
-import { formatCommandSignature, parseCommandMessage } from '../src/agent/commands/index.js';
+import { executeCommand, formatCommandSignature, getCommandDocs, parseCommandMessage } from '../src/agent/commands/index.js';
+import { ActionManager } from '../src/agent/action_manager.js';
 import { initializeMinecraftData } from '../src/utils/mcdata.js';
 import { VILLAGE_AUTONOMY_PREAMBLE, villageDecisionMessage } from '../src/agent/startup_goal.js';
-import { noteVerifiedProgress, readIntentions, updateIntention } from '../src/village/intentions.js';
+import { describeIntentionChoice, noteVerifiedProgress, readIntentions, updateIntention } from '../src/village/intentions.js';
 import { renderVillageContext } from '../src/village/context.js';
 import { readEpisodes } from '../src/village/episodes.js';
 import { claimSpeech, isDelayedMirror, rememberInWorldSpeech, resetSpeechClaims } from '../src/village/locality.js';
-import { createTurnQueue, largelyOverlaps, noteSpeechTurn, observePeerSpeech, VILLAGE_SPEECH_RECOVERY } from '../src/village/turn_taking.js';
+import convoManager, { isClosingSpeech } from '../src/agent/conversation.js';
+import { serverProxy } from '../src/agent/mindserver_proxy.js';
+import { stripAddresseeLabels } from '../src/village/locality.js';
+import { createTurnQueue, decisionKindForCommand, largelyOverlaps, noteSpeechTurn, observePeerSpeech, omitRepeatedDecisions, villageActionTurn, VILLAGE_SPEECH_RECOVERY } from '../src/village/turn_taking.js';
 
 initializeMinecraftData('1.21.6');
 
@@ -67,6 +71,17 @@ test('repeated speech is recognized without treating it as progress', () => {
     assert.equal(largelyOverlaps(EXPLORE, INTENTION), true);
     assert.equal(largelyOverlaps("Let's go to the woods.", "Let's go to the woods."), true);
     assert.equal(largelyOverlaps('The chest held a map.', 'The flowers by the door need water.'), false);
+    assert.equal(largelyOverlaps('(To Cass) See you there.', 'See you there.'), true);
+    assert.equal(largelyOverlaps('(To Cass) (To Cass) See you there.', '(To Cass) See you there.'), true);
+    assert.equal(stripAddresseeLabels('(To Cass) (To Cass) See you there.'), 'See you there.');
+    assert.equal(isClosingSpeech("I'm heading home. See you there."), true);
+    assert.equal(isClosingSpeech("I'll stay here and watch for changes."), false);
+    assert.deepEqual(parseCommandMessage('!stay(30)').args, [30]);
+    assert.deepEqual(parseCommandMessage('!goToRememberedPlace("home")').args, ['home']);
+    assert.deepEqual(parseCommandMessage('!intention("abandon", "a short note")').args, ['abandon', 'a short note']);
+    assert.equal(decisionKindForCommand('!stay', true), 'wait');
+    assert.equal(decisionKindForCommand('!intention', true), 'rejected');
+    assert.equal(decisionKindForCommand('!goToRememberedPlace', false), 'action');
 
     let state = noteSpeechTurn(null, { text: EXPLORE, acted: false });
     assert.equal(state.stalled, false);
@@ -185,18 +200,21 @@ test('ordinary speech waits and an urgent interruption does not', async () => {
     try {
         let active = 0;
         let max = 0;
+        let calls = 0;
         const agent = decisionAgent(async () => {
             active++;
             max = Math.max(max, active);
             await delay(40);
             active--;
-            return 'I will walk toward the woods.';
+            calls++;
+            return calls === 1 ? 'I will walk toward the woods.' : 'The path you found is worth a look.';
         });
         const first = Agent.prototype.handleMessage.call(agent, 'system', villageDecisionMessage(), 1, { ephemeral: true });
         const second = Agent.prototype.handleMessage.call(agent, 'Nell', 'I found a path.', 1);
         await Promise.all([first, second]);
         assert.equal(max, 1);
-        assert.equal(agent.routed.filter(text => text === 'I will walk toward the woods.').length, 2);
+        assert.equal(agent.routed.includes('I will walk toward the woods.'), true);
+        assert.equal(agent.routed.includes('The path you found is worth a look.'), true);
         assert.equal(agent.turns.some(turn => turn.content === villageDecisionMessage()), false);
         assert.equal(agent.turns.some(turn => turn.name === 'Nell'), true);
 
@@ -288,10 +306,14 @@ test('repeated announcements yield once, then an action lets the day continue', 
     agent.handleMessage = async (_source, message) => {
         prompts.push(message);
         if (prompts.length < 3) {
+            agent._lastDecisionKind = 'speech';
             agent._lastDecisionSpeech = EXPLORE;
             return false;
         }
-        if (message === VILLAGE_SPEECH_RECOVERY) return true;
+        if (message === VILLAGE_SPEECH_RECOVERY) {
+            agent._lastDecisionKind = 'action';
+            return true;
+        }
         agent.self_prompter.stop(false);
         return false;
     };
@@ -358,6 +380,294 @@ test('survival decisions are not put behind the village turn queue', async () =>
         assert.equal(max, 2);
     } finally {
         setSettings({});
+    }
+});
+
+test('a speech-only action turn waits instead of calling the model again immediately', async () => {
+    const agent = {
+        name: 'Ione',
+        shut_up: false,
+        isIdle: () => true,
+        actions: { stop: async () => {} },
+        bot: {},
+        history: { add: async () => {}, save: async () => {}, turns: [] },
+    };
+    agent.self_prompter = new SelfPrompter(agent);
+    agent.self_prompter.village_interval = 80;
+    agent.self_prompter.cooldown = 80;
+    const stamps = [];
+    agent.handleMessage = async () => {
+        stamps.push(Date.now());
+        agent._lastDecisionKind = 'speech';
+        agent._lastDecisionSpeech = "I'll stay here and watch for changes.";
+        if (stamps.length >= 4) agent.self_prompter.stop(false);
+        return false;
+    };
+    agent.self_prompter.start(VILLAGE_AUTONOMY_PREAMBLE);
+    const started = Date.now();
+    while (agent.self_prompter.loop_active) {
+        if (Date.now() - started > 3000) break;
+        await delay(5);
+    }
+    assert.equal(agent.self_prompter.loop_active, false);
+    assert.equal(stamps.length, 4);
+    assert.equal(stamps[3] - stamps[2] >= 60, true);
+    assert.equal(agent._speechLoop.stalled, true);
+});
+
+test('a farewell exchange ends without another reply, and a repeated addressee does not broadcast', async (t) => {
+    const sent = [];
+    const chats = [];
+    const archived = [];
+    const originalSocket = serverProxy.socket;
+    const originalResume = convoManager.resume_delay_ms;
+    serverProxy.socket = { emit(_event, recipient, packet) { sent.push({ recipient, packet }); } };
+    convoManager.convos = {};
+    convoManager.activeConversation = null;
+    convoManager._stopMonitor();
+    convoManager.resume_delay_ms = 0;
+    convoManager.updateAgents([
+        { name: 'Bram', in_game: true },
+        { name: 'Cass', in_game: true },
+    ]);
+    const agent = {
+        name: 'Bram',
+        last_sender: null,
+        shut_up: false,
+        isIdle: () => true,
+        actions: { currentActionLabel: '' },
+        history: { add: async (name, message) => archived.push({ name, message }) },
+        openChat: async (message) => chats.push(message),
+        handleMessage: async () => { throw new Error('a farewell must not request another reply'); },
+        self_prompter: {
+            prompt: VILLAGE_AUTONOMY_PREAMBLE,
+            isActive: () => false,
+            isPaused: () => true,
+            pause: async () => {},
+            start() {},
+        },
+        bot: {
+            entity: { position: { x: 0, y: 64, z: 0 } },
+            players: { Cass: { entity: { position: { x: 2, y: 64, z: 0 } } } },
+        },
+    };
+    convoManager.initAgent(agent);
+    setSettings({ village_autonomy: true, chat_bot_messages: true, hearing_blocks: 32, village_hearing_blocks: 32 });
+    t.after(() => {
+        for (const convo of Object.values(convoManager.convos)) convo.clearTimer();
+        convoManager._stopMonitor();
+        convoManager.convos = {};
+        convoManager.activeConversation = null;
+        convoManager.resume_delay_ms = originalResume;
+        convoManager.updateAgents([]);
+        serverProxy.socket = originalSocket;
+        setSettings({});
+    });
+
+    convoManager.sendToBot('Cass', 'The well is quiet today.', false, true);
+    convoManager.sendToBot('Cass', 'I found a cracked bucket beside it.', false, true);
+    assert.equal(chats.length, 2);
+    assert.equal(sent.length, 2);
+    assert.equal(sent[1].packet.end, false);
+    chats.length = 0;
+    sent.length = 0;
+    for (const convo of Object.values(convoManager.convos)) convo.resetProgress();
+
+    convoManager.sendToBot('Cass', '(To Cass) See you there.', false, true);
+    convoManager.sendToBot('Cass', '(To Cass) (To Cass) See you there.', false, true);
+    assert.equal(chats.length, 1);
+    assert.equal(chats[0], '(To Cass) See you there.');
+    assert.equal(sent[0].packet.message, 'See you there.');
+    assert.equal(sent.at(-1).packet.conversation_watchdog.reason, 'yield');
+    assert.equal(sent.at(-1).packet.message, '');
+
+    for (const convo of Object.values(convoManager.convos)) convo.clearTimer();
+    convoManager._stopMonitor();
+    convoManager.convos = {};
+    convoManager.activeConversation = null;
+    sent.length = 0;
+    chats.length = 0;
+    agent._speechLoop = { last: [], stalled: false, speechOnly: 0 };
+
+    await convoManager.receiveFromBot('Cass', {
+        message: "I'm heading home. See you there.",
+        start: true,
+        end: false,
+    });
+    assert.equal(convoManager.inConversation('Cass'), true);
+    assert.equal(convoManager._getConvo('Cass').partnerClosing, true);
+
+    convoManager.sendToBot('Cass', '(To Cass) See you there.', false, true);
+    assert.equal(chats.length, 1);
+    assert.equal(chats[0], '(To Cass) See you there.');
+    assert.equal(sent.at(-1).packet.message, 'See you there.');
+    assert.equal(sent.at(-1).packet.end, true);
+    assert.equal(sent.at(-1).packet.conversation_watchdog.reason, 'farewell');
+    assert.equal(convoManager.inConversation('Cass'), false);
+    assert.equal(agent._speechLoop.stalled, true);
+
+    agent.name = 'Cass';
+    agent._speechLoop = { last: [], stalled: false, speechOnly: 0 };
+    agent.bot.players = { Bram: { entity: { position: { x: 2, y: 64, z: 0 } } } };
+    convoManager.convos = {};
+    convoManager.activeConversation = null;
+    convoManager.updateAgents([
+        { name: 'Cass', in_game: true },
+        { name: 'Bram', in_game: true },
+    ]);
+    await convoManager.receiveFromBot('Bram', {
+        message: '(To Cass) (To Cass) See you there.',
+        start: false,
+        end: true,
+        conversation_watchdog: { reason: 'farewell' },
+    });
+    assert.equal(convoManager.inConversation('Bram'), false);
+    assert.equal(agent._speechLoop.stalled, true);
+    assert.equal(archived.some(turn => turn.message === 'See you there.'), true);
+});
+
+test('abandoning with no intention is a no-progress decision and leaves history untouched', async () => {
+    const parent = mkdtempSync(path.join(os.tmpdir(), 'village-abandon-'));
+    const apples = '!intention("abandon", "I\'ll find some apples to make a sandwich.")';
+    const seed = {
+        schema_version: 1,
+        active: null,
+        waking_decision_at: '2026-11-15T20:44:26.842Z',
+        history: [{
+            id: 'int-0001',
+            text: 'Look in the chest.',
+            status: 'abandoned',
+            progress: 'I will make a sandwich.',
+            updated_at: '2026-11-15T20:00:00.000Z',
+        }],
+    };
+    writeFileSync(path.join(parent, 'intentions.json'), JSON.stringify(seed, null, 2));
+    const before = readFileSync(path.join(parent, 'intentions.json'));
+    setSettings({
+        village_autonomy: true,
+        agent_data_root: parent,
+        language: 'en',
+        max_commands: -1,
+        reasoning: { auto_reflection: false },
+    });
+    const calls = { n: 0 };
+    const agent = decisionAgent(async () => {
+        calls.n += 1;
+        if (calls.n > 4) throw new Error('the abandon command asked the model again in the same decision');
+        return apples;
+    });
+    agent.actions = new ActionManager(agent);
+    try {
+        assert.equal(villageActionTurn(), VILLAGE_SPEECH_RECOVERY);
+        assert.match(villageActionTurn(), /!intention\("revise", "a short note"\)/);
+        assert.doesNotMatch(villageActionTurn(), /!intention\("abandon"/);
+        assert.match(describeIntentionChoice(null), /no active intention/);
+        assert.match(getCommandDocs(agent), /no active intention/);
+        assert.doesNotMatch(getCommandDocs(agent), /!intention\("abandon"/);
+
+        await agent.handleMessage('system', 'choose', -1, { ephemeral: true });
+        assert.equal(calls.n, 1);
+        assert.equal(agent._lastDecisionKind, 'rejected');
+        assert.equal(readFileSync(path.join(parent, 'intentions.json')).equals(before), true);
+        const correction = agent.turns.map(turn => turn.content).join('\n');
+        assert.match(correction, /no active intention to abandon/);
+        assert.match(correction, /I'll find some apples to make a sandwich/);
+        assert.match(correction, /was not saved as an intention/);
+        assert.match(correction, /!intention\("revise", "a short note"\)/);
+
+        const other = await executeCommand(agent, '!intention("abandon", "Maybe berries instead.")');
+        assert.match(other, /UNCHANGED BLOCKING CONDITION/);
+        assert.match(other, /no active intention to abandon/);
+        assert.equal(readFileSync(path.join(parent, 'intentions.json')).equals(before), true);
+        assert.equal(readIntentions(parent).history.length, 1);
+        assert.equal(readIntentions(parent).history[0].text, 'Look in the chest.');
+        assert.equal(readIntentions(parent).active, null);
+
+        const kept = omitRepeatedDecisions([
+            { role: 'assistant', content: 'The well is quiet.' },
+            { role: 'assistant', content: apples },
+            { role: 'system', content: 'Do not immediately repeat !intention("abandon", "apples"). You have no active intention to abandon.' },
+            { role: 'system', content: 'ACTION RESULT: You have no active intention to abandon. "apples" was not saved as an intention.' },
+        ]);
+        assert.deepEqual(kept.map(turn => turn.content), ['The well is quiet.']);
+
+        const opened = updateIntention(parent, { action: 'revise', text: 'Stack the chest.', now: () => NOW });
+        assert.equal(opened.ok, true);
+        assert.equal(opened.intentions.active.text, 'Stack the chest.');
+        const same = updateIntention(parent, { action: 'revise', text: 'Stack the chest.', now: () => NOW });
+        assert.equal(same.ok, false);
+        assert.equal(readIntentions(parent).history.length, 1);
+        const closed = updateIntention(parent, {
+            action: 'abandon',
+            text: 'I\'ll find some apples to make a sandwich.',
+            now: () => NOW,
+        });
+        assert.equal(closed.ok, true);
+        assert.equal(closed.intentions.active, null);
+        assert.equal(closed.intentions.history.at(-1).text, 'Stack the chest.');
+        assert.equal(closed.intentions.history.at(-1).status, 'abandoned');
+        assert.match(closed.intentions.history.at(-1).progress, /apples/);
+        assert.match(describeIntentionChoice(readIntentions(parent)), /no active intention/);
+        writeFileSync(path.join(parent, 'identity.json'), JSON.stringify({
+            name: 'Bram',
+            backstory: 'Bram keeps the garden.',
+            temperament: 'steady',
+            interests: 'fruit',
+        }));
+        const active = updateIntention(parent, { action: 'pursue', text: 'Find some apples.', now: () => NOW });
+        assert.match(villageActionTurn('', active.intentions), /!intention\("abandon", "a short note"\)/);
+        assert.match(renderVillageContext(parent).text, /Find some apples/);
+        assert.match(renderVillageContext(parent).text, /!intention\("revise", "a short note"\)/);
+    } finally {
+        setSettings({});
+        rmSync(parent, { recursive: true, force: true });
+    }
+});
+
+test('repeated abandon decisions back off instead of calling the model continuously', async () => {
+    const parent = mkdtempSync(path.join(os.tmpdir(), 'village-abandon-loop-'));
+    writeFileSync(path.join(parent, 'intentions.json'), JSON.stringify({
+        schema_version: 1,
+        active: null,
+        waking_decision_at: null,
+        history: [{ id: 'int-0001', text: 'Look in the chest.', status: 'abandoned' }],
+    }));
+    const before = readFileSync(path.join(parent, 'intentions.json'));
+    setSettings({
+        village_autonomy: true,
+        agent_data_root: parent,
+        language: 'en',
+        max_commands: -1,
+        reasoning: { auto_reflection: false },
+    });
+    const seen = [];
+    let calls = 0;
+    const agent = decisionAgent(async (history) => {
+        calls += 1;
+        if (calls > 20) throw new Error('intention loop kept calling the model');
+        seen.push(String(history?.at?.(-1)?.content || ''));
+        return '!intention("abandon", "I\'ll find some apples to make a sandwich.")';
+    });
+    agent.actions = new ActionManager(agent);
+    agent.self_prompter = new SelfPrompter(agent);
+    agent.self_prompter.village_interval = 5;
+    agent.self_prompter.cooldown = 5;
+    agent.self_prompter.recovery_backoff = 80;
+    agent.self_prompter.max_recovery_backoff = 160;
+    try {
+        agent.self_prompter.start(VILLAGE_AUTONOMY_PREAMBLE);
+        await delay(450);
+        agent.self_prompter.stop(false);
+        const started = Date.now();
+        while (agent.self_prompter.loop_active && Date.now() - started < 1000) await delay(5);
+        assert.equal(agent.self_prompter.loop_active, false);
+        assert.ok(calls >= 3, `expected several bounded decisions, got ${calls}`);
+        assert.ok(calls < 12, `inference was not bounded, got ${calls} calls`);
+        assert.ok(seen.some(text => text.includes('You have no active intention') && text.includes('!intention("revise"') && !text.includes('!intention("abandon"')));
+        assert.equal(readFileSync(path.join(parent, 'intentions.json')).equals(before), true);
+    } finally {
+        setSettings({});
+        rmSync(parent, { recursive: true, force: true });
     }
 });
 

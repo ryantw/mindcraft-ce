@@ -4,6 +4,7 @@ import { readEpisodes } from './episodes.js';
 import { readKnowledge } from './knowledge.js';
 import { readRelationships } from './relationships.js';
 import { readIntentions, activeIntentionText } from './intentions.js';
+import { activeAmbitionText, readAmbitions } from './ambitions.js';
 
 export const DREAM_EPISODE_CAP = 60;
 export const DREAM_INPUT_CHAR_CAP = 9000;
@@ -87,6 +88,8 @@ export function buildDreamInput(dataRoot, { cutoffIndex = null, sleepId = null }
     }
     const stance = morning?.stance || '';
     if (stance) lines.push(`Current personal stance: ${clip(stance, 240)}`);
+    const ambition = activeAmbitionText(readAmbitions(dataRoot));
+    if (ambition) lines.push(`Long-term ambition: ${clip(ambition, 240)}. Keep it unless lived experience changed the direction itself.`);
     const active = activeIntentionText(intentions);
     if (active) {
         const progress = intentions.active?.progress ? ` Progress: ${clip(intentions.active.progress, 160)}` : '';

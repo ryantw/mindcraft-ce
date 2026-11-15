@@ -4,6 +4,7 @@ import { readEpisodes } from './episodes.js';
 import { readLife } from './life.js';
 import { readRelationships } from './relationships.js';
 import { readIntentions } from './intentions.js';
+import { ambitionAfterDream, readAmbitions } from './ambitions.js';
 
 const BANK_CAP = 40;
 
@@ -147,18 +148,22 @@ export function planConsolidation(dataRoot, { sleepId, validated, enqueuedAt = n
     }
     intentions.proposals = validated.intentions || [];
 
+    const files = {
+        'journal.json': nextJournal,
+        'long_term.json': { schema_version: 1, memories },
+        'relationships.json': { ...relationships, schema_version: relationships.schema_version || 1, relationships: map },
+        'morning.json': morning,
+        'intentions.json': intentions,
+    };
+    const nextAmbition = ambitionAfterDream(readAmbitions(dataRoot), validated.ambition, now);
+    if (nextAmbition) files['ambitions.json'] = nextAmbition;
+
     return {
         schema_version: 1,
         sleep_id: sleepId,
         phase: 'prepared',
         episode_ids: episodeIds,
-        files: {
-            'journal.json': nextJournal,
-            'long_term.json': { schema_version: 1, memories },
-            'relationships.json': { ...relationships, schema_version: relationships.schema_version || 1, relationships: map },
-            'morning.json': morning,
-            'intentions.json': intentions,
-        },
+        files,
     };
 }
 

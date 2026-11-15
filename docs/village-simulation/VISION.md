@@ -64,7 +64,7 @@ Agreed. Implementations that contradict these are out of spec even if they satis
 5. Knowledge is local. Hearing, seeing, opening a chest, and being told are the channels. Simulation-wide state is for the observer.
 6. Death is an irreversible end of that life. The record remains. Other inhabitants learn about it only by seeing evidence, seeing the body or the dropped belongings, or being told by someone who knows. The house is not cleared because they died.
 7. Absence is not death. A process crash, network disconnect, operator stop, or night spent elsewhere is not a death event and must not be narrated as one.
-8. The village is a place, not a quest. No required build objective and no assigned lifelong ambition. The autonomous loop still runs. A current intention and a long-term ambition are optional and may both be empty. The inhabitant chooses what to do in that case.
+8. The village is a place, not a quest. No required build objective, profession, or settlement quota. A long-term personal ambition is part of ordinary life: the inhabitant may pursue it, revise it, or set it aside. The engine does not assign the day's exploration, gathering, construction, or social activity. At night, returning home and attempting to sleep is a shared survival behavior, not a personality preference. Immediate danger still comes first.
 9. Facts and stories stay apart. Inventory, recipes, verified action results, and life-or-death state are code-owned. Journals and relationship interpretations are subjective and may be wrong.
 10. Sleep can impair recall later. It must never delete or corrupt identity or the factual record.
 11. The survival experiment remains runnable on its current settings and profiles.

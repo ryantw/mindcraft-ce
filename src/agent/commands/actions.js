@@ -1,3 +1,5 @@
+import Vec3 from 'vec3';
+import { decorativePlacementTarget, isGroundPlant } from '../decorative_placement.js';
 import * as skills from '../library/skills.js';
 import * as construction from '../library/construction.js';
 import settings from '../settings.js';
@@ -79,6 +81,23 @@ function runAsStructuredAction(actionFn, outcomeBuilder, resume = false, timeout
     };
 
     return wrappedAction;
+}
+
+function travelOutcome(input, params) {
+    const text = String(input.feedback || '');
+    const reached = input.actionValue === true || (input.actionValue !== false && /you have reached/i.test(text));
+    const interrupted = Boolean(input.execution?.interrupted) && !input.execution?.timedout;
+    if (!reached || interrupted) return failedOutcome(input, params, 'could_not_reach');
+    return createActionOutcome({
+        action: input.action,
+        params,
+        status: 'success',
+        before: input.before,
+        after: input.after,
+        relevantProgress: true,
+        retryableWithoutStateChange: true,
+        bot: input.agent.bot,
+    });
 }
 
 function failedOutcome(input, params, fallback='action_failed', { relevantState=null, refineReason=null }={}) {
@@ -314,9 +333,12 @@ export const actionsList = [
             'player_name': {type: 'string', description: 'The name of the player to go to.'},
             'closeness': {type: 'float', description: 'How close to get to the player. Omit to stop about 3 blocks away.', domain: [0, Infinity], optional: true}
         },
-        perform: runAsAction(async (agent, player_name, closeness) => {
-            await skills.goToPlayer(agent.bot, player_name, closeness);
-        })
+        perform: runAsStructuredAction(async (agent, player_name, closeness) => {
+            return await skills.goToPlayer(agent.bot, player_name, closeness);
+        }, (input) => travelOutcome(input, {
+            player_name: input.args[0],
+            ...(input.args[1] != null ? { closeness: input.args[1] } : {}),
+        }))
     },
     {
         name: '!followPlayer',
@@ -338,9 +360,12 @@ export const actionsList = [
             'z': {type: 'float', description: 'The z coordinate.', domain: [-Infinity, Infinity]},
             'closeness': {type: 'float', description: 'How close to get to the location. Omit to stop about 2 blocks away.', domain: [0, Infinity], optional: true}
         },
-        perform: runAsAction(async (agent, x, y, z, closeness) => {
-            await skills.goToPosition(agent.bot, x, y, z, closeness);
-        })
+        perform: runAsStructuredAction(async (agent, x, y, z, closeness) => {
+            return await skills.goToPosition(agent.bot, x, y, z, closeness);
+        }, (input) => travelOutcome(input, {
+            x: input.args[0], y: input.args[1], z: input.args[2],
+            ...(input.args[3] != null ? { closeness: input.args[3] } : {}),
+        }))
     },
     {
         name: '!searchForBlock',
@@ -349,13 +374,13 @@ export const actionsList = [
             'type': { type: 'BlockName', description: 'The block type to go to.' },
             'search_range': { type: 'float', description: 'The range to search for the block. Minimum 32.', domain: [10, 512] }
         },
-        perform: runAsAction(async (agent, block_type, range) => {
+        perform: runAsStructuredAction(async (agent, block_type, range) => {
             if (range < 32) {
                 skills.log(agent.bot, `Minimum search range is 32.`);
                 range = 32;
             }
-            await skills.goToNearestBlock(agent.bot, block_type, 4, range);
-        })
+            return await skills.goToNearestBlock(agent.bot, block_type, 4, range);
+        }, (input) => travelOutcome(input, { type: input.args[0], search_range: input.args[1] }))
     },
     {
         name: '!searchForEntity',
@@ -364,9 +389,9 @@ export const actionsList = [
             'type': { type: 'string', description: 'The type of entity to go to.' },
             'search_range': { type: 'float', description: 'The range to search for the entity.', domain: [32, 512] }
         },
-        perform: runAsAction(async (agent, entity_type, range) => {
-            await skills.goToNearestEntity(agent.bot, entity_type, 4, range);
-        })
+        perform: runAsStructuredAction(async (agent, entity_type, range) => {
+            return await skills.goToNearestEntity(agent.bot, entity_type, 4, range);
+        }, (input) => travelOutcome(input, { type: input.args[0], search_range: input.args[1] }))
     },
     {
         name: '!moveAway',
@@ -383,6 +408,14 @@ export const actionsList = [
         perform: async function (agent, name) {
             const pos = agent.bot.entity.position;
             agent.memory_bank.rememberPlace(name, pos.x, pos.y, pos.z);
+            agent.actions?.recordOutcome?.(createActionOutcome({
+                action: 'rememberHere',
+                params: { name },
+                status: 'success',
+                relevantProgress: true,
+                retryableWithoutStateChange: true,
+                bot: agent.bot,
+            }));
             return `Location saved as "${name}".`;
         }
     },
@@ -390,14 +423,14 @@ export const actionsList = [
         name: '!goToRememberedPlace',
         description: 'Go to a saved location.',
         params: {'name': { type: 'string', description: 'The name of the location to go to.' }},
-        perform: runAsAction(async (agent, name) => {
+        perform: runAsStructuredAction(async (agent, name) => {
             const pos = agent.memory_bank.recallPlace(name);
             if (!pos) {
-            skills.log(agent.bot, `No location named "${name}" saved.`);
-            return;
+                skills.log(agent.bot, `No location named "${name}" saved.`);
+                return false;
             }
-            await skills.goToPosition(agent.bot, pos[0], pos[1], pos[2], 1);
-        })
+            return await skills.goToPosition(agent.bot, pos[0], pos[1], pos[2], 1);
+        }, (input) => travelOutcome(input, { name: input.args[0] }))
     },
     {
         name: '!givePlayer',
@@ -663,19 +696,29 @@ export const actionsList = [
     },
         {
         name: '!placeHere',
-        description: 'Place a given block in the current location. Do NOT use to build structures; use it for single items such as a crafting table, furnace, chest or torch. For structures use !placeBlockAt, !buildLine and !buildPlane.',
+        description: 'Place a given block in the current location. A flower or sapling is placed on nearby empty ground and does not break a path, an existing flower, or another block. Do NOT use to build structures; use it for single items such as a crafting table, furnace, chest or torch. For structures use !placeBlockAt, !buildLine and !buildPlane.',
         params: {'type': { type: 'BlockOrItemName', description: 'The block type to place.' }},
         perform: runAsStructuredAction(async (agent, type) => {
-            let pos = agent.bot.entity.position;
-            const target = {
+            const pos = agent.bot.entity.position;
+            const read = (x, y, z) => agent.bot.blockAt(new Vec3(x, y, z))?.name || null;
+            let target = {
                 x: Math.floor(pos.x),
                 y: Math.floor(pos.y),
                 z: Math.floor(pos.z),
             };
-            const beforeBlock = agent.bot.blockAt(pos.floored())?.name || null;
-            const placed = await skills.placeBlock(agent.bot, type, pos.x, pos.y, pos.z);
+            if (isGroundPlant(type)) {
+                const spot = decorativePlacementTarget(read, pos);
+                if (!spot) {
+                    const beforeBlock = read(target.x, target.y, target.z);
+                    skills.log(agent.bot, `No empty ground nearby for ${type}. Leaving paths, flowers, and other blocks in place.`);
+                    return { placed: false, target, beforeBlock, afterBlock: beforeBlock };
+                }
+                target = spot;
+            }
+            const beforeBlock = read(target.x, target.y, target.z);
+            const placed = await skills.placeBlock(agent.bot, type, target.x, target.y, target.z);
             if (typeof agent.bot.waitForTicks === 'function') await agent.bot.waitForTicks(2);
-            const afterBlock = agent.bot.blockAt(pos.floored())?.name || null;
+            const afterBlock = read(target.x, target.y, target.z);
             return { placed, target, beforeBlock, afterBlock };
         }, input => {
             const [type] = input.args;

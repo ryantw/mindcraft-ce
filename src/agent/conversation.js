@@ -1,7 +1,8 @@
 import settings from './settings.js';
 import { containsCommand, stripUnsharedCommands } from './commands/index.js';
 import { sendBotChatToServer } from './mindserver_proxy.js';
-import { acceptInWorldSpeech, claimSpeech, DEFAULT_HEARING_BLOCKS, isDelayedMirror, rememberInWorldSpeech, speakerDistance } from '../village/locality.js';
+import { acceptInWorldSpeech, claimSpeech, DEFAULT_HEARING_BLOCKS, isDelayedMirror, rememberInWorldSpeech, speakerDistance, stripAddresseeLabels } from '../village/locality.js';
+import { recordVillageSpeech } from '../village/experience.js';
 
 let agent;
 let agent_names = [];
@@ -23,12 +24,56 @@ const CONVERSATIONAL_FILLER = new Set([
 export function normalizeConversationMessage(message) {
     if (typeof message !== 'string')
         return '';
-    return message
+    return stripAddresseeLabels(message)
+        .replace(/\(from other bot\)/gi, ' ')
         .toLocaleLowerCase()
         .normalize('NFKC')
         .replace(/[’']/gu, '')
         .replace(/[^\p{L}\p{N}]+/gu, ' ')
         .trim();
+}
+
+const OVERLAP_FILLER = new Set([
+    'a', 'an', 'and', 'around', 'at', 'be', 'for', 'i', 'ill', 'in', 'is', 'it',
+    'just', 'my', 'of', 'on', 'or', 'the', 'to', 'what', 'with',
+]);
+
+function significantTokens(text) {
+    return new Set(
+        normalizeConversationMessage(text)
+            .split(' ')
+            .filter(token => token && !OVERLAP_FILLER.has(token))
+    );
+}
+
+/** Similar sentences, including an intention read back with a few extra words. */
+export function largelyOverlaps(first, second) {
+    if (areMessagesSubstantiallySimilar(first, second)) return true;
+    const left = significantTokens(first);
+    const right = significantTokens(second);
+    if (left.size < 4 || right.size < 4) return false;
+    let shared = 0;
+    for (const token of left) {
+        if (right.has(token)) shared++;
+    }
+    return shared / Math.min(left.size, right.size) >= 0.8;
+}
+
+const CLOSING_SPEECH = [
+    /\bsee you\b/,
+    /\bgoodbye\b/,
+    /\bgood bye\b/,
+    /\bbye\b/,
+    /\bheading home\b/,
+    /\bhead(?:ing)? back\b/,
+    /\bon my way home\b/,
+];
+
+/** A goodbye can end the exchange. It does not ask for another reply. */
+export function isClosingSpeech(text) {
+    const normalized = normalizeConversationMessage(text);
+    if (!normalized) return false;
+    return CLOSING_SPEECH.some(pattern => pattern.test(normalized));
 }
 
 export function areMessagesSubstantiallySimilar(first, second) {
@@ -80,6 +125,8 @@ export class Conversation {
         this.repetitiveTurns = 0;
         this.repetitiveDirections = new Set();
         this.cooldownUntil = 0;
+        this.partnerClosing = false;
+        this.farewellSent = false;
     }
 
     clearTimer() {
@@ -96,6 +143,8 @@ export class Conversation {
         this.active = false;
         this.ignore_until_start = false;
         this.in_queue = [];
+        this.partnerClosing = false;
+        this.farewellSent = false;
         this.resetProgress();
     }
 
@@ -202,6 +251,11 @@ class ConversationManager {
             if (this.awaiting_response && agent.isIdle()) {
                 wait_time += delta;
                 if (wait_time > this.wait_time_limit) {
+                    if (settings.village_autonomy === true) {
+                        console.log(`[${agent.name}] ${convo_partner} has not replied. No further reply is required.`);
+                        this.yieldSpeech(convo_partner, 'no reply was required');
+                        return;
+                    }
                     runDetached(
                         agent.handleMessage('system', `${convo_partner} hasn't responded in ${this.wait_time_limit/1000} seconds, respond with a message to them or your own action.`),
                         `Failed to prompt for stalled conversation with ${convo_partner}`
@@ -284,14 +338,36 @@ class ConversationManager {
         }
         const convo = this._getConvo(send_to);
 
-        message = stripUnsharedCommands(message);
+        message = stripAddresseeLabels(stripUnsharedCommands(message));
         if (!message) return;
+        if (settings.village_autonomy === true && this._repeatedOutgoing(convo, message)) {
+            console.warn(`[${agent.name}] Suppressed a repeated statement to ${send_to}.`);
+            this._notifyYield(send_to);
+            this.yieldSpeech(send_to, 'repeated statement');
+            return;
+        }
         if (settings.chat_bot_messages && open_chat)
             runDetached(agent.openChat(`(To ${send_to}) ${message}`), `Failed to mirror message to ${send_to}`);
 
         if (convo.ignore_until_start)
             return;
         convo.active = true;
+
+        const closingReply = settings.village_autonomy === true && convo.partnerClosing && isClosingSpeech(message);
+        if (closingReply) {
+            convo.farewellSent = true;
+            sendBotChatToServer(send_to, {
+                message,
+                start: false,
+                end: true,
+                conversation_watchdog: { reason: 'farewell' },
+            });
+            this.awaiting_response = false;
+            this.yieldSpeech(send_to, 'farewell');
+            return;
+        }
+        if (settings.village_autonomy === true && isClosingSpeech(message))
+            convo.farewellSent = true;
 
         const end = message.includes('!endConversation');
         if (!end && convo.observeProgress('outgoing', message)) {
@@ -310,6 +386,19 @@ class ConversationManager {
 
     async receiveFromBot(sender, received) {
         if (settings.village_autonomy === true) {
+            received = { ...received, message: stripAddresseeLabels(received?.message || '') };
+            const control = received.conversation_watchdog?.reason;
+            if (control === 'yield' || control === 'farewell') {
+                const convo = this._getConvo(sender);
+                if (control === 'farewell' && received.message) {
+                    convo.queue(received);
+                    recordVillageSpeech(settings.agent_data_root, { speaker: sender, text: received.message });
+                }
+                console.log(`[${agent.name}] ${sender} ${control === 'farewell' ? 'closed the conversation' : 'stopped repeating'}. No reply is required.`);
+                this.yieldSpeech(sender, control === 'farewell' ? 'farewell' : 'repeated statement');
+                return;
+            }
+            if (!received.message) return;
             const range = settings.village_hearing_blocks || DEFAULT_HEARING_BLOCKS;
             const distance = speakerDistance(agent?.bot, sender);
             if (!acceptInWorldSpeech({ village: true, distance, range })) {
@@ -346,6 +435,9 @@ class ConversationManager {
             convo.reset();
             this.startConversationFromOtherBot(sender);
         }
+
+        if (settings.village_autonomy === true && isClosingSpeech(received.message) && !received.end)
+            convo.partnerClosing = true;
 
         this._clearMonitorTimeouts();
         convo.clearTimer();
@@ -450,6 +542,41 @@ class ConversationManager {
                 cooldown_ms: Math.max(0, Math.ceil(cooldown)),
             },
         });
+    }
+
+    _repeatedOutgoing(convo, message) {
+        return (convo.progressHistory?.outgoing || []).some(previous => largelyOverlaps(previous, message));
+    }
+
+    _notifyYield(sender) {
+        try {
+            sendBotChatToServer(sender, {
+                message: '',
+                start: false,
+                end: true,
+                conversation_watchdog: { reason: 'yield' },
+            });
+        } catch (error) {
+            console.warn(`[${agent?.name}] Could not end the repeated exchange with ${sender}: ${error.message}`);
+        }
+    }
+
+    /**
+     * Leave the conversation and ask for an action, a wait, or an intention.
+     * A suppressed sentence is not another model call.
+     */
+    yieldSpeech(sender, reason = 'speech yielded to an action', { notify = false } = {}) {
+        if (notify && sender) this._notifyYield(sender);
+        if (agent) {
+            const prior = agent._speechLoop || {};
+            agent._speechLoop = {
+                last: [...(prior.last || [])],
+                stalled: true,
+                speechOnly: Math.max(prior.speechOnly || 0, 3),
+            };
+        }
+        if (sender && this.convos[sender]) this.endConversation(sender, reason);
+        else if (this.activeConversation) this.endConversation(this.activeConversation.name, reason);
     }
 
     _endRepetitiveConversation(sender) {

@@ -1,14 +1,16 @@
 import { readEpisodes, selectEpisodes } from './episodes.js';
 import { readKnowledge, suppliesGuidance } from './knowledge.js';
 import { readRelationships } from './relationships.js';
-import { readIntentions, activeIntentionText } from './intentions.js';
+import { readIntentions, activeIntentionText, describeIntentionChoice } from './intentions.js';
+import { activeAmbitionText, readAmbitions } from './ambitions.js';
 import { VILLAGE_AUTONOMY_PREAMBLE } from '../agent/startup_goal.js';
+import { stripAddresseeLabels } from './locality.js';
 import { existsSync, readFileSync } from 'fs';
 import path from 'path';
 
 export const SHARED_GAMEPLAY_LINE = 'Shared actions, commands, and survival rules are the same for every inhabitant. Identity changes what you choose and what you say. It does not add a job, a script, or a different command set.';
 
-export const SHARED_WORLD_LINE = 'Darkness and night are dangerous outdoors. A house can shelter you, and a bed can be slept in when you choose and the game allows it. Do not attack a calm neutral creature such as an enderman, wolf, bee, or piglin. Retreating, eating, and seeking shelter are valid, and immediate danger outranks a personal intention. Sleep is a choice, not a schedule. Armor and a weapon left in a chest protect no one; wear what you are carrying. Stay on dry land. Water is not a path, and getting out of it comes before fighting.';
+export const SHARED_WORLD_LINE = 'During the day, pursue your ambitions and live your life. At night, return to shelter and sleep. Immediate survival takes precedence, but resume the sleep routine once you are safe. Do not attack a calm neutral creature such as an enderman, wolf, bee, or piglin. Armor and a weapon left in a chest protect no one; wear what you are carrying. Stay on dry land. Water is not a path, and getting out of it comes before fighting.';
 
 const CONTEXT_FILES = ['identity.json', 'knowledge.json', 'relationships.json', 'episodes.json', 'morning.json', 'intentions.json'];
 
@@ -58,19 +60,25 @@ export function renderVillageContext(dataRoot, { intention = '', liveChest = und
     ];
     const interests = clip(identity.interests, 160);
     if (interests) lines.push(`Interests, as preferences rather than duties: ${interests}`);
+    if (existsSync(path.join(dataRoot, 'ambitions.json'))) {
+        files.push('ambitions.json');
+        const ambition = activeAmbitionText(readAmbitions(dataRoot));
+        if (ambition) lines.push(`Long-term ambition, private unless you choose to say it: ${clip(ambition, 220)}`);
+    }
     const personalStore = existsSync(path.join(dataRoot, 'intentions.json'))
         ? (files.push('intentions.json'), readIntentions(dataRoot))
         : null;
     const personal = activeIntentionText(personalStore);
     const current = personal || String(intention || '').trim();
-    if (current && current !== VILLAGE_AUTONOMY_PREAMBLE) {
-        lines.push(`Current intention: ${clip(current, 180)}`);
-        if (personal) {
-            lines.push('That intention is optional. You may pursue it, revise it, finish it, or leave it. Saying it aloud is not progress.');
-            if (personalStore?.active?.progress) {
-                lines.push(`Verified progress: ${clip(personalStore.active.progress, 160)}`);
-            }
+    if (personal) {
+        lines.push(describeIntentionChoice(personalStore));
+        if (personalStore?.active?.progress) {
+            lines.push(`Verified progress: ${clip(personalStore.active.progress, 160)}`);
         }
+    } else if (current && current !== VILLAGE_AUTONOMY_PREAMBLE) {
+        lines.push(`Current intention: ${clip(current, 180)}`);
+    } else {
+        lines.push(describeIntentionChoice(null));
     }
     const morningFile = path.join(dataRoot, 'morning.json');
     if (existsSync(morningFile)) {
@@ -108,7 +116,7 @@ export function renderVillageContext(dataRoot, { intention = '', liveChest = und
     if (selected.length) {
         lines.push('Recent experience:');
         for (const episode of selected) {
-            lines.push(`- ${episode.at} ${episode.kind}/${episode.source}: ${clip(episode.text, 140)}`);
+            lines.push(`- ${episode.at} ${episode.kind}/${episode.source}: ${clip(stripAddresseeLabels(episode.text), 140)}`);
         }
     }
     lines.push('Someone you cannot see is not thereby missing or dead. You learn of a death only by seeing it or by being told.');

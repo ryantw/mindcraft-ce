@@ -56,6 +56,14 @@ function inferredEvidence(action) {
     };
 }
 
+/** These commands finish by doing the action. A model-written inventory or block condition is not their result. */
+const VERIFIED_BY_COMMAND = new Set([
+    'goToRememberedPlace', 'rememberHere', 'goToPlayer',
+    'searchForBlock', 'searchForEntity',
+    'placeHere',
+    'intention', 'ambition', 'stance',
+]);
+
 function normalizeEvidence(raw, action) {
     if (action?.name === 'goToCoordinates') {
         const params = action.params || {};
@@ -72,6 +80,7 @@ function normalizeEvidence(raw, action) {
             };
         }
     }
+    if (VERIFIED_BY_COMMAND.has(action?.name)) return inferredEvidence(action);
     const evidence = raw && typeof raw === 'object' ? { ...raw } : {};
     if (!EVIDENCE_TYPES.has(evidence.type)) return inferredEvidence(action);
     if (evidence.type === 'inventory_min' || evidence.type === 'inventory_delta') {
@@ -312,6 +321,7 @@ export class PlanManager {
         const previous = this.getCurrentPlan();
         console.log(`[${this.agent.name}] Requesting persistent plan (${reason}).`);
         let feedback = null;
+        let rejections = 0;
         for (let attempt = 0; attempt < 2; attempt++) {
             let proposal;
             try {
@@ -321,6 +331,11 @@ export class PlanManager {
                 return previous;
             }
             if (!proposal) {
+                if (attempt === 0) {
+                    feedback = ['The previous response was empty, truncated, or not the required JSON object. Return only one JSON object with objective and steps.'];
+                    console.warn(`[${this.agent.name}] Planning response was empty or unparseable. Retrying once.`);
+                    continue;
+                }
                 this._planningFailed('Planning request returned no usable plan.');
                 return previous;
             }
@@ -337,10 +352,13 @@ export class PlanManager {
                 }
             }
             this.lastPlanningProblems = problems;
+            rejections++;
             console.warn(`[${this.agent.name}] Plan proposal rejected as not executable (attempt ${attempt + 1}): ${problems.join(' | ')}`);
             feedback = problems;
         }
-        this._planningFailed('Plan proposal rejected twice as not executable; continuing autonomously.');
+        this._planningFailed(rejections >= 2
+            ? 'Plan proposal rejected twice as not executable; continuing autonomously.'
+            : 'Planning request returned no usable plan.');
         return previous;
     }
 

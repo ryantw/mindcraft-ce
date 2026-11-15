@@ -6,6 +6,7 @@ import convoManager from './conversation.js';
 import { noteStuckRecovery } from './reflection_triggers.js';
 import { systemObservation } from './system_events.js';
 import { combatWaitsForLand, readWaterState, rememberWater, shouldEscapeWater } from '../village/water.js';
+import { nightPhase, runNightRoutine } from '../village/night.js';
 
 async function say(agent, message) {
     agent.bot.modes.behavior_log += message + '\n';
@@ -256,6 +257,28 @@ const modes_list = [
         }
     },
     {
+        name: 'night_sleep',
+        description: 'At dusk and night, leave ordinary activity, return home, and sleep. Combat, fire, and water still come first.',
+        interrupts: ['all'],
+        on: false,
+        active: false,
+        update: async function (agent) {
+            if (settings.village_autonomy !== true) return;
+            const bot = agent.bot;
+            const memory = bot._nightSleep;
+            if (memory?.cooling && Date.now() < memory.cooling) return;
+            const phase = nightPhase(bot.time?.timeOfDay);
+            if (phase === 'day' || bot.isSleeping) return;
+            execute(this, agent, async () => {
+                const result = await runNightRoutine(agent);
+                if (result?.kind === 'wait' || result?.kind === 'idle') {
+                    bot._nightSleep = bot._nightSleep || {};
+                    bot._nightSleep.cooling = Date.now() + 4000;
+                }
+            });
+        }
+    },
+    {
         name: 'hunting',
         description: 'Hunt nearby animals when idle.',
         interrupts: ['action:followPlayer'],
@@ -389,7 +412,7 @@ const modes_list = [
     }
 ];
 
-const IMMEDIATE_MODES = new Set(['water_escape', 'self_preservation', 'cowardice', 'self_defense']);
+const IMMEDIATE_MODES = new Set(['water_escape', 'self_preservation', 'cowardice', 'self_defense', 'night_sleep']);
 
 /** Water, fire, and combat start moving without waiting for the current model call. */
 export function modeStartsImmediately(modeName) {
@@ -426,6 +449,7 @@ async function execute(mode, agent, func, timeout=-1) {
     const stillInWater = mode.name === 'water_escape' && shouldEscapeWater(readWaterState(agent.bot));
     let should_reprompt = 
         interrupted_action && // it interrupted a previous action
+        mode.name !== 'night_sleep' && // night keeps the goal and does not ask for a new activity
         !agent.actions.resume_func && // there is no resume function
         !agent.self_prompter.isActive() && // self prompting is not on
         !code_return.interrupted && // this mode action was not interrupted by something else
@@ -570,5 +594,6 @@ export function initModes(agent) {
     if (settings.village_autonomy === true) {
         agent.bot.modes.setOn('cowardice', true);
         agent.bot.modes.setOn('water_escape', true);
+        agent.bot.modes.setOn('night_sleep', true);
     }
 }

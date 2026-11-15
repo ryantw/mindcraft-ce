@@ -174,8 +174,9 @@ test('home knowledge is isolated and a live chest overrides the admission list',
 test('no lifelong goal is required, and talking does not require a plan', async () => {
     assert.equal(activityNeedsPlan('talk'), false);
     assert.equal(activityNeedsPlan('visit'), false);
-    assert.match(villageDecisionMessage(), /does not need a multistep plan/);
-    assert.doesNotMatch(villageDecisionMessage(), /MUST contain a command/);
+    assert.match(villageDecisionMessage(), /pursue your ambition/);
+    assert.match(villageDecisionMessage(), /Staying still for a while is a complete choice/);
+    assert.doesNotMatch(villageDecisionMessage(), /MUST contain a command|no assigned quest|not required to sleep/);
     let prompts = 0;
     let planned = false;
     const agent = {

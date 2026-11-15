@@ -1,4 +1,6 @@
+import settings from '../agent/settings.js';
 import { VILLAGE_AUTONOMY_PREAMBLE } from '../agent/startup_goal.js';
+import { activeIntentionText, readIntentions } from './intentions.js';
 
 const BOT_LEAD = 'You are an AI Minecraft bot named $NAME that can converse with players, see, move, mine, build, and interact with the world by using commands.';
 const PERSON_LEAD = 'You are $NAME, a person who lives in this village. You can look, walk, speak, and use the same commands as every other inhabitant. You are not an assistant.';
@@ -29,16 +31,21 @@ export function adaptVillagePrompt(prompt, { enabled = true } = {}) {
 }
 
 /**
- * An unfinished plan stays on file. In a village prompt it is optional work,
- * and it does not outrank a personal intention.
+ * An unfinished plan stays on file. When it pursues the current goal, the
+ * next step is the ordinary action. Danger, night, or a change of mind can pause it.
  */
 export function villagePlanPrompt(planManager) {
     const plan = planManager?.getCurrentPlan?.();
     if (!plan || plan.status === 'completed' || plan.status === 'abandoned') return '';
     const detail = String(planManager.formatForPrompt?.() || '')
         .replace('PERSISTENT PLAN', 'Steps on file')
-        .replace('Objective chosen by you:', 'Earlier objective:');
-    return `UNFINISHED PRACTICAL WORK\nThis is optional. A personal intention comes first when you have one. You may continue this work or leave it.\n${detail}\n`;
+        .replace('Objective chosen by you:', 'Current goal:');
+    const goal = settings.agent_data_root ? activeIntentionText(readIntentions(settings.agent_data_root)) : '';
+    const aligned = goal && plan.objective === goal;
+    const lead = aligned
+        ? 'CURRENT GOAL IN PROGRESS\nContinue the next step unless you are in danger, it is time to sleep, or you deliberately change your mind. Do not restart from inspecting the same container.'
+        : 'UNFINISHED PRACTICAL WORK\nThis is optional. A personal intention comes first when you have one. You may continue this work or leave it.';
+    return `${lead}\n${detail}\n`;
 }
 
 export function villageSelfPromptLine(currentPrompt, { stopped = false } = {}) {

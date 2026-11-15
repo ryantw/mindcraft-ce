@@ -23,6 +23,7 @@
     "Dislikes being directed."
   ],
   "interests": ["how unfamiliar things work", "a path not yet walked", "taking something apart", "news that is actually new"],
+  "ambition_seed": "Discover the world beyond the village, understand unfamiliar places, and collect interesting objects and memories from journeys. Learn to balance curiosity with maintaining friendships.",
   "seed_relationships": [
     {
       "other_id": "nell",

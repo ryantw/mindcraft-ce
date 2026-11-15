@@ -1,6 +1,7 @@
 import * as world from './library/world.js';
 import { expandBuildRequest } from './library/construction.js';
 import { getBlockDropItems, getBlockMinimumDrop, getItemStackSize } from '../utils/mcdata.js';
+import { intentionWatchKey } from '../village/intentions.js';
 
 export const ACTION_OUTCOME_VERSION = 1;
 export const NORMAL_STORAGE_SLOTS = 36;
@@ -340,6 +341,14 @@ export function blockingRepeatCount(counts, { commandKey, commandName, action, p
     }
     const resource = resourceAttemptKey(action, params);
     if (resource) highest = Math.max(highest, counts.get(resource) || 0);
+    if (action === 'intention') {
+        const op = params?.action;
+        highest = Math.max(
+            highest,
+            counts.get(intentionWatchKey(op, 'none')) || 0,
+            counts.get(intentionWatchKey(op, 'unchanged')) || 0,
+        );
+    }
     return highest;
 }
 
@@ -347,7 +356,8 @@ export function blockingRepeatCount(counts, { commandKey, commandName, action, p
 export function isCommandRejection(text) {
     const value = String(text || '');
     return /was given \d+ args|is not a command|incorrectly formatted|Invalid parameter|Invalid block|Invalid item|UNCHANGED BLOCKING CONDITION|REPEATED ACTION BLOCKED|reserved for the human operator|\bError:/i.test(value)
-        || /Dug down 0 blocks/i.test(value);
+        || /Dug down 0 blocks/i.test(value)
+        || /no active intention|was not saved as an intention|Repeating it changes nothing|Intention action must be/i.test(value);
 }
 
 export function makeValidationOutcome({ agent, commandName, message, signature }) {

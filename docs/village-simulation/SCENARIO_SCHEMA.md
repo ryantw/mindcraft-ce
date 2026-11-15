@@ -80,9 +80,9 @@ Rules:
 - `settings.permanent_death` is optional. `true` retires a verified death of that body. Omitted or `false` keeps the survival respawn-and-continue behavior. Village Alpha sets `true`.
 - `settings.hearing_blocks` is optional, an integer from 8 to 128. Omitted means 32. It is the radius for ordinary speech in a village session.
 - `settings.remains_container` is optional. When set, a verified death summons one named armor stand through RCON on that container. The name must not be `ai-village`. Only the Village Alpha scenario may name `village-alpha`. Omitted means the death record is written and no stand is summoned. A failed placement stays on the death record and can be retried up to three times without starting the deceased inhabitant. The client reads the armor stand's custom name. The `village_remains` tag is server-side only.
-- No field here assigns a profession, a settlement quest, or a lifelong ambition.
+- No field here assigns a profession, a settlement quest, or a required daily activity.
 
-The scenario does not embed `settings.init_message` and must not overwrite it. The survival message stays the default for `node main.js` with no scenario. A village run has no assigned ambition. That does not stop the autonomous loop. Milestone 1 adds the scenario-level hook described in [ARCHITECTURE.md](ARCHITECTURE.md). Current intentions, when they exist, come from runtime after milestone 4. Long-term ambitions are never a scenario field.
+The scenario does not embed `settings.init_message` and must not overwrite it. The survival message stays the default for `node main.js` with no scenario. A village run still has the autonomous loop. Milestone 1 adds the scenario-level hook described in [ARCHITECTURE.md](ARCHITECTURE.md). Current intentions, when they exist, come from runtime after milestone 4. A personal ambition, when one exists, lives in that inhabitant's runtime and is not a scenario-wide quest.
 
 ## Inhabitant file
 
@@ -135,7 +135,8 @@ Rules:
 - `temperament` is the initial voice and habits. Runtime may add a stance later. It may not delete these strings.
 - `interests` are preferences, not jobs and not plan steps.
 - `seed_relationships` are optional. They are this person's private starting view. The other file need not mirror them. `other_id` must be another inhabitant in the same scenario. Omitted, or an empty list, means this person starts with no recorded opinion. Strangers, acquaintances, friends, and disagreements are all valid.
-- There is no `goal`, `intention`, or `ambition` field.
+- `ambition_seed` is optional. It is one sentence the first start may copy into `ambitions.json` when that file is absent. It is not part of the identity checksum, it is not written into `identity.json`, and a later start does not replace an ambition the inhabitant already has. The inhabitant may revise it. It does not assign the day's actions.
+- There is no `goal` or `intention` field. Those stay in runtime.
 
 ### Profile checksum
 
@@ -145,7 +146,7 @@ The checksum covers the profile as admitted. It does not cover `village.json`, s
 
 Profiles still need a Mindcraft model block so the existing loader can run them. Proposed: the scenario runner writes or overlays the day model from `scenario.models.day` at start, and the committed inhabitant file does not fork prompts. If an inhabitant file also contains a `model` object, it overrides the scenario day model for that person only. The dream model is never taken from the inhabitant file; dreaming is a scenario-level role so the population shares one dream configuration unless the scenario itself is changed.
 
-Implemented. The scenario runner builds a profile `{name, model, embedding}` from the inhabitant and `scenario.models.day`. `Prompter` still merges `profiles/defaults/_default.json`, then `base_profile`, then that profile. Gameplay prompt text stays shared. The admission snapshot is written to `identity.json` and is what the day prompt reads. The dream model is `settings.dream_model` on the agent settings copy. The dream client is constructed only when that process claims a sleep job. It is not constructed at admission.
+Implemented. The scenario runner builds a profile `{name, model, embedding, ambition_seed}` from the inhabitant and `scenario.models.day`. `Prompter` still merges `profiles/defaults/_default.json`, then `base_profile`, then that profile. Gameplay prompt text stays shared. The admission snapshot is written to `identity.json` and is what the day prompt reads. The dream model is `settings.dream_model` on the agent settings copy. The dream client is constructed only when that process claims a sleep job. It is not constructed at admission.
 
 ## Village file
 

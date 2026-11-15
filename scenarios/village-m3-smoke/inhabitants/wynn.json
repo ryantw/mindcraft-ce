@@ -9,6 +9,7 @@
   ],
   "temperament": ["Speaks briefly.", "Notices when objects in the house move."],
   "interests": ["doorways", "quiet mornings"],
+  "ambition_seed": "Learn the quiet places around home, notice what has changed, and keep a life that does not need to fill every silence.",
   "seed_relationships": [
     {
       "other_id": "nia",

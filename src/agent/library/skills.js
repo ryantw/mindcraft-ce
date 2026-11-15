@@ -1815,8 +1815,7 @@ export async function goToNearestBlock(bot, blockType,  min_distance=2, range=64
         return false;
     }
     log(bot, `Found ${blockType} at ${block.position}. Navigating...`);
-    await goToPosition(bot, block.position.x, block.position.y, block.position.z, min_distance);
-    return true;
+    return await goToPosition(bot, block.position.x, block.position.y, block.position.z, min_distance);
 }
 
 export async function goToNearestEntity(bot, entityType, min_distance=2, range=64) {
@@ -1835,8 +1834,7 @@ export async function goToNearestEntity(bot, entityType, min_distance=2, range=6
     }
     let distance = bot.entity.position.distanceTo(entity.position);
     log(bot, `Found ${entityType} ${distance} blocks away.`);
-    await goToPosition(bot, entity.position.x, entity.position.y, entity.position.z, min_distance);
-    return true;
+    return await goToPosition(bot, entity.position.x, entity.position.y, entity.position.z, min_distance);
 }
 
 export async function goToPlayer(bot, username, distance=3) {

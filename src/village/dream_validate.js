@@ -137,6 +137,8 @@ export function validateDreamOutput(raw, {
         if (!text || COMMAND.test(text)) continue;
         intentions.push(text);
     }
+    let ambition = clip(parsed.ambition, 240);
+    if (ambition && (COMMAND.test(ambition) || unsupportedDeath(ambition, episodeText))) ambition = '';
 
     const memories = [];
     const dropped = [];
@@ -192,8 +194,8 @@ export function validateDreamOutput(raw, {
 
     return {
         ok: true,
-        value: { journal, brief, stance, intentions, memories, relationships },
+        value: { journal, brief, stance, intentions, memories, relationships, ambition },
         dropped,
-        ignoredFields: Object.keys(parsed).filter(key => !['journal', 'brief', 'stance', 'intentions', 'memories', 'relationships'].includes(key)),
+        ignoredFields: Object.keys(parsed).filter(key => !['journal', 'brief', 'stance', 'intentions', 'memories', 'relationships', 'ambition'].includes(key)),
     };
 }

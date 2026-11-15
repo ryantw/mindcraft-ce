@@ -6,6 +6,7 @@ import { releaseWikiSearchBlock } from './wiki_search.js';
 import { noteReflectionAction, reflectionStatus } from '../reasoning.js';
 import { makeValidationOutcome, validationBehaviorKey } from '../action_outcome.js';
 import settings from '../settings.js';
+import { describeIntentionChoice, readIntentions } from '../../village/intentions.js';
 
 let suppressNoDomainWarning = true;
 
@@ -462,6 +463,13 @@ export function getCommandDocs(agent) {
             for (let param in command.params) {
                 const optional = command.params[param].optional ? ' Optional.' : '';
                 docs += `${param}: (${typeTranslations[command.params[param].type]??command.params[param].type}) ${command.params[param].description}${optional}\n`;
+            }
+        }
+        if (command.name === '!intention' && settings.village_autonomy === true && settings.agent_data_root) {
+            try {
+                docs += `${describeIntentionChoice(readIntentions(settings.agent_data_root))}\n`;
+            } catch {
+                // An unreadable intention file stays out of the prompt.
             }
         }
     }

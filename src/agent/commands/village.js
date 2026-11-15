@@ -1,6 +1,46 @@
 import settings from '../settings.js';
+import { createActionOutcome } from '../action_outcome.js';
 import { expressStance } from '../../village/relationships.js';
-import { updateIntention } from '../../village/intentions.js';
+import { clearIntentionRepetition, updateIntention } from '../../village/intentions.js';
+import { reviseAmbition } from '../../village/ambitions.js';
+
+function recordPrivate(agent, action, params, ok, message) {
+    if (!agent.actions?.recordOutcome) return;
+    agent.actions.recordOutcome(createActionOutcome({
+        action,
+        params,
+        status: ok ? 'success' : 'failure',
+        reason: ok ? null : {
+            code: 'not_recorded',
+            message,
+            prerequisites: [],
+            condition: 'unchanged_behavior',
+        },
+        retryableWithoutStateChange: !ok,
+        relevantProgress: ok,
+    }));
+}
+
+function recordIntention(agent, action, text, result) {
+    if (!agent.actions?.recordOutcome) return;
+    const changed = Boolean(result.ok && result.changed !== false);
+    agent.actions.recordOutcome(createActionOutcome({
+        action: 'intention',
+        params: { action, text: String(text || '') },
+        status: changed ? 'success' : 'failure',
+        reason: changed ? null : {
+            code: result.code || 'intention_rejected',
+            message: result.reason,
+            prerequisites: [],
+            condition: 'unchanged_behavior',
+        },
+        retryableWithoutStateChange: changed,
+        relevantProgress: changed,
+        behaviorKey: result.behaviorKey || null,
+        details: { signature: '!intention(action:string, text:string)' },
+    }));
+    if (changed) clearIntentionRepetition(agent);
+}
 
 export const villageCommands = [
     {
@@ -24,7 +64,11 @@ export const villageCommands = [
                     stance,
                     note,
                 });
-                if (!result.ok) return result.reason;
+                if (!result.ok) {
+                    recordPrivate(agent, 'stance', { person, kind }, false, result.reason);
+                    return result.reason;
+                }
+                recordPrivate(agent, 'stance', { person, kind }, true);
                 return 'You noted that privately. It is your interpretation, not an established fact.';
             } catch (error) {
                 return error.message;
@@ -32,20 +76,41 @@ export const villageCommands = [
         },
     },
     {
-        name: '!intention',
-        description: 'Note a personal intention. pursue, revise, complete, or abandon. This is optional, private, and not a quest. It does not start a multistep plan. A visit, a conversation, or resting needs no plan.',
+        name: '!ambition',
+        description: 'Revise your private long-term ambition. This does not change your admitted identity and does not by itself start a plan.',
         villageOnly: true,
         params: {
-            action: { type: 'string', description: 'pursue, revise, complete, or abandon.' },
-            text: { type: 'string', description: 'Your own words. A short note is enough when you complete or abandon.' },
+            text: { type: 'string', description: 'The ambition in your own words.' },
+        },
+        perform: async (agent, text) => {
+            if (settings.village_autonomy !== true || !settings.agent_data_root) {
+                return 'That command is not part of this session.';
+            }
+            const result = reviseAmbition(settings.agent_data_root, text, { source: 'day' });
+            if (!result.ok) {
+                recordPrivate(agent, 'ambition', { text: String(text || '') }, false, result.reason);
+                return result.reason;
+            }
+            recordPrivate(agent, 'ambition', { text: String(text || '') }, true);
+            return 'You kept that as a private ambition. It is not an assigned quest.';
+        },
+    },
+    {
+        name: '!intention',
+        description: 'Note or close your current personal goal. It is private and not an assigned quest. The next decisions can continue it. You may revise it, rest, or set it aside.',
+        villageOnly: true,
+        params: {
+            action: { type: 'string', description: 'pursue or revise. complete and abandon apply only when an intention is already active.' },
+            text: { type: 'string', description: 'Your own words. On pursue or revise, these words are the intention. On complete or abandon, they only explain the close and do not start a new intention.' },
         },
         perform: async (agent, action, text) => {
             if (settings.village_autonomy !== true || !settings.agent_data_root) {
                 return 'That command is not part of this session.';
             }
             const result = updateIntention(settings.agent_data_root, { action, text, source: 'day' });
+            recordIntention(agent, action, text, result);
             if (!result.ok) return result.reason;
-            return 'You noted that for yourself. It is not an assigned goal.';
+            return 'You noted that as your current goal. It is yours to revise.';
         },
     },
 ];

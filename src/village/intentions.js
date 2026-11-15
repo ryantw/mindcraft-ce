@@ -38,19 +38,72 @@ function clip(text, max) {
     return String(text || '').replace(/!\w+(?:\([^)]*\))?/g, '').replace(/\s+/g, ' ').trim().slice(0, max);
 }
 
+const CHOOSE_NEW = 'To choose a new intention, use !intention("revise", "a short note") or !intention("pursue", "a short note"). Or take a direct action. !stay(30) waits where you are.';
+
+/** Shared watchdog key for equivalent intention operations, independent of the note text. */
+export function intentionWatchKey(action, outcome = 'none') {
+    const kind = String(action || '').trim().toLowerCase();
+    if (!ACTIONS.has(kind)) return 'intention:invalid';
+    return `intention:${kind}:${outcome}`;
+}
+
+function refuse(kind, outcome, reason, code) {
+    return {
+        ok: false,
+        changed: false,
+        code,
+        behaviorKey: intentionWatchKey(kind, outcome),
+        reason,
+    };
+}
+
 /**
- * A personal intention is a hint. It is not written into the self-prompt and
- * it does not create a plan. Simple social choices stay one action.
+ * What the inhabitant can do with an intention right now.
+ * With nothing active, abandon and complete are not offered.
+ */
+export function describeIntentionChoice(store) {
+    const text = activeIntentionText(store);
+    if (!text) {
+        return `You have no active intention. ${CHOOSE_NEW} There is nothing to abandon or complete.`;
+    }
+    return `Current goal: ${clip(text, 180)}. Continue it unless danger, night, or a change of mind comes first. Saying it aloud is not progress. !intention("pursue", "what you did") notes progress. !intention("revise", "a short note") changes the words. !intention("complete", "a short note") or !intention("abandon", "a short note") closes it. The note on a close is not a new intention.`;
+}
+
+/** A real change, a rest, or another action ends the no-progress intention streak. */
+export function clearIntentionRepetition(agent) {
+    const blocks = agent?.actions?.retryBlocks;
+    if (blocks) {
+        for (const [key, block] of [...blocks]) {
+            if (String(block?.behaviorKey || key).startsWith('intention:')) blocks.delete(key);
+        }
+    }
+    const counts = agent?.repeatWatchdog?.counts;
+    if (!counts) return;
+    for (const key of [...counts.keys()]) {
+        if (String(key).startsWith('intention:')) counts.delete(key);
+    }
+}
+
+/**
+ * A personal intention is the current goal. The plan manager turns an active
+ * goal into steps. Closing it does not invent a new one from the close note.
  */
 export function updateIntention(dataRoot, { action, text = '', source = 'day', sleepId = null, now = () => new Date().toISOString() } = {}) {
     const kind = String(action || '').trim();
-    if (!ACTIONS.has(kind)) return { ok: false, reason: 'Intention action must be pursue, revise, complete, or abandon.' };
+    if (!ACTIONS.has(kind)) {
+        return refuse(kind, 'none', 'Intention action must be pursue, revise, complete, or abandon.', 'invalid_action');
+    }
     const at = now();
     const store = readIntentions(dataRoot);
     const words = clip(text, 180);
     const prior = store.active;
     if (kind === 'revise') {
-        if (!words) return { ok: false, reason: 'Revising an intention needs your own words.' };
+        if (!words) {
+            return refuse(kind, 'none', 'Revising an intention needs your own words. Say it with !intention("revise", "a short note"), or take a direct action.', 'needs_words');
+        }
+        if (prior && prior.text === words) {
+            return refuse(kind, 'unchanged', 'That is already your intention. Repeating it changes nothing. Take a direct action, leave it, or use !intention("revise", "a short note") with different words.', 'unchanged');
+        }
         if (prior) store.history.push({ ...prior, status: 'revised', updated_at: at });
         store.active = {
             id: prior?.id || `int-${String(store.history.length + 1).padStart(4, '0')}`,
@@ -64,7 +117,16 @@ export function updateIntention(dataRoot, { action, text = '', source = 'day', s
         };
         store.waking_decision_at = at;
     } else if (kind === 'pursue') {
-        if (!prior && !words) return { ok: false, reason: 'There is no intention to pursue.' };
+        if (!prior && !words) {
+            return refuse(kind, 'none', `You have no active intention to pursue. ${CHOOSE_NEW}`, 'no_active_intention');
+        }
+        if (prior) {
+            const nextProgress = words || prior.progress || '';
+            const echoed = !words || words === prior.text || words === (prior.progress || '');
+            if (prior.status === 'pursuing' && (prior.progress || '') === nextProgress && echoed) {
+                return refuse(kind, 'unchanged', 'That intention is already what you are doing. Repeating it changes nothing. Take a direct action, or change it with !intention("revise", "a short note").', 'unchanged');
+            }
+        }
         if (!prior) {
             store.active = {
                 id: `int-${String(store.history.length + 1).padStart(4, '0')}`,
@@ -86,7 +148,10 @@ export function updateIntention(dataRoot, { action, text = '', source = 'day', s
         }
         store.waking_decision_at = at;
     } else if (kind === 'complete' || kind === 'abandon') {
-        if (!prior) return { ok: false, reason: 'There is no intention to close.' };
+        if (!prior) {
+            const saved = words ? ` "${words}" was not saved as an intention.` : '';
+            return refuse(kind, 'none', `You have no active intention to ${kind}.${saved} ${CHOOSE_NEW}`, 'no_active_intention');
+        }
         store.history.push({
             ...prior,
             status: kind === 'complete' ? 'completed' : 'abandoned',
@@ -98,7 +163,7 @@ export function updateIntention(dataRoot, { action, text = '', source = 'day', s
     }
     store.history = store.history.slice(-30);
     writeAtomic(fileOf(dataRoot), store);
-    return { ok: true, intentions: store };
+    return { ok: true, changed: true, behaviorKey: intentionWatchKey(kind, 'done'), intentions: store };
 }
 
 /**

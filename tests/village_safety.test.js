@@ -32,7 +32,8 @@ test('a calm enderman is not a fight and an angry one is fled from', () => {
 test('night and low health are visible without asking the model', () => {
     assert.equal(villageSafetyNote({ time: { timeOfDay: 1000 }, health: 20 }), '');
     assert.match(villageSafetyNote({ time: { timeOfDay: 13000 }, health: 18 }), /It is night/);
-    assert.match(villageSafetyNote({ time: { timeOfDay: 13000 }, health: 18 }), /not required to sleep/);
+    assert.match(villageSafetyNote({ time: { timeOfDay: 13000 }, health: 18 }), /Return to shelter and sleep/);
+    assert.doesNotMatch(villageSafetyNote({ time: { timeOfDay: 13000 }, health: 18 }), /not required to sleep/);
     assert.match(villageSafetyNote({ time: { timeOfDay: 4000 }, health: 8 }), /health is low/);
 });
 
@@ -49,7 +50,7 @@ test('shared survival knowledge is part of every waking prompt', () => {
         assert.equal(shown.text.includes(SHARED_WORLD_LINE), true);
         assert.match(shown.text, /neutral creature/);
         assert.match(shown.text, /enderman/);
-        assert.match(shown.text, /Sleep is a choice/);
+        assert.match(shown.text, /At night, return to shelter and sleep/);
     } finally {
         rmSync(parent, { recursive: true, force: true });
     }

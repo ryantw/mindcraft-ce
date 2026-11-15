@@ -9,7 +9,7 @@ import { ActionManager } from './action_manager.js';
 import { NPCContoller } from './npc/controller.js';
 import { MemoryBank } from './memory_bank.js';
 import { SelfPrompter } from './self_prompter.js';
-import convoManager from './conversation.js';
+import convoManager, { largelyOverlaps } from './conversation.js';
 import { handleTranslation, handleEnglishTranslation } from '../utils/translator.js';
 import { addBrowserViewer } from './vision/browser_viewer.js';
 import { serverProxy, sendOutputToServer } from './mindserver_proxy.js';
@@ -28,9 +28,9 @@ import { loadVillagePlaces } from '../village/knowledge.js';
 import { buildDeathFacts, recordVerifiedDeath } from '../village/death.js';
 import { noteNearbyRemains, recordVillageAction, recordVillageSpeech } from '../village/experience.js';
 import { waterBlockedOutcome } from '../village/water.js';
-import { acceptInWorldSpeech, claimSpeech, DEFAULT_HEARING_BLOCKS, isDelayedMirror, rememberInWorldSpeech, speakerDistance } from '../village/locality.js';
+import { acceptInWorldSpeech, claimSpeech, DEFAULT_HEARING_BLOCKS, isDelayedMirror, rememberInWorldSpeech, speakerDistance, stripAddresseeLabels } from '../village/locality.js';
 import { noteVerifiedProgress } from '../village/intentions.js';
-import { createTurnQueue, observePeerSpeech } from '../village/turn_taking.js';
+import { createTurnQueue, decisionKindForCommand, observePeerSpeech, omitRepeatedDecisions } from '../village/turn_taking.js';
 import { attachVillageMind, cancelDreamsForDeath } from '../village/dream_service.js';
 import { villageSpokenWords } from './chat_hygiene.js';
 
@@ -202,18 +202,21 @@ export class Agent {
 
         const hearNearby = (username, message) => {
             if (settings.village_autonomy === true) {
+                const heardText = stripAddresseeLabels(message);
+                if (!heardText) return;
                 const range = settings.village_hearing_blocks || DEFAULT_HEARING_BLOCKS;
                 const distance = speakerDistance(this.bot, username);
                 if (!acceptInWorldSpeech({ village: true, distance, range })) return;
-                if (!claimSpeech(username, message)) return;
-                if (isDelayedMirror(username, message)) return;
-                rememberInWorldSpeech(username, message);
+                if (!claimSpeech(username, heardText)) return;
+                if (isDelayedMirror(username, heardText)) return;
+                rememberInWorldSpeech(username, heardText);
                 if (convoManager.isOtherAgent(username)) {
                     // Heard, and kept. A reply is the next decision, not a second
                     // generation that cancels the one already running.
-                    observePeerSpeech(this, username, message);
+                    observePeerSpeech(this, username, heardText);
                     return;
                 }
+                return respondFunc(username, heardText);
             }
             return respondFunc(username, message);
         };
@@ -416,6 +419,8 @@ export class Agent {
         }
 
         let used_command = false;
+        this._lastDecisionKind = '';
+        this._lastDecisionSpeech = '';
         if (max_responses === null) {
             max_responses = settings.max_commands === -1 ? Infinity : settings.max_commands;
         }
@@ -506,6 +511,10 @@ export class Agent {
         for (let i=0; i<max_responses; i++) {
             if (checkInterrupt()) break;
             let history = this.history.getHistory();
+            if (settings.village_autonomy === true) {
+                history = history.map(turn => ({ ...turn, content: stripAddresseeLabels(turn.content) }));
+                if (this._speechLoop?.stalled) history = omitRepeatedDecisions(history);
+            }
             if (ephemeral) history = history.concat([{ role: 'system', content: message }]);
             let res = await this.prompter.promptConvo(history, { contextKind });
 
@@ -564,6 +573,7 @@ export class Agent {
                     await this.history.add('system', warning);
                     this.history.save();
                     this.actions.repeatSuppressed = true;
+                    this._lastDecisionKind = 'rejected';
 
                     try {
                         const problemKey = recordCommandResult(this, {
@@ -646,6 +656,7 @@ export class Agent {
                     : !outcome.trim() || isCommandRejection(outcome) ||
                         /\b(error|invalid|failed|cannot|could not|unable to)\b/i.test(outcome) ||
                         /unchanged blocking condition|don't have|do not have|not enough|no resources|collected 0|no .* nearby to collect|took to long|could not reach|path not found|pathfinding stopped|reserved for the human operator/i.test(outcome);
+                this._lastDecisionKind = decisionKindForCommand(command_name, failed);
 
                 // A search that finds the same block is not progress, and a
                 // different failed command must not erase this count.
@@ -735,7 +746,10 @@ export class Agent {
                     console.warn(`[${this.name}] Automatic reflection error: ${error.message}`);
                 }
 
-                if (!execute_res)
+                // Village decisions are one command. The outer loop waits, so a
+                // failed intention cannot ask the model again in this same turn.
+                // Survival still chains a failure into the existing repeat block.
+                if (!execute_res || settings.village_autonomy === true)
                     break;
             }
             else { // conversation response
@@ -751,9 +765,25 @@ export class Agent {
                     await this.history.add('system', 'Your last reply only repeated an action result. Results are private observations; do not restate them in chat. Say something in your own words or take an action.');
                     break;
                 }
-                this._lastDecisionSpeech = speech.text;
-                this.history.add(this.name, speech.text);
-                this.routeResponse(source, speech.text);
+                let spoken = speech.text;
+                if (settings.village_autonomy === true) spoken = stripAddresseeLabels(spoken);
+                this._lastDecisionKind = spoken ? 'speech' : '';
+                this._lastDecisionSpeech = spoken;
+                if (!spoken) break;
+                const repeated = (this._outgoingSpeech || []).some(previous => largelyOverlaps(previous, spoken));
+                const suppress = settings.village_autonomy === true && ((options?.ephemeral === true && this._suppressSpeech === true) || repeated);
+                if (suppress) {
+                    console.warn(`[${this.name}] Suppressed ${repeated ? 'a repeated statement' : 'speech during action selection'}.`);
+                    if (convoManager.inConversation()) {
+                        const partner = convoManager.isOtherAgent(source) ? source : this.last_sender;
+                        convoManager.yieldSpeech(partner, repeated ? 'repeated statement' : 'action selection', { notify: true });
+                    }
+                    break;
+                }
+                if (settings.village_autonomy === true)
+                    this._outgoingSpeech = [...(this._outgoingSpeech || []), spoken].slice(-6);
+                this.history.add(this.name, spoken);
+                this.routeResponse(source, spoken);
                 break;
             }
             
@@ -779,6 +809,10 @@ export class Agent {
 
     async routeResponse(to_player, message) {
         if (this.shut_up) return;
+        if (settings.village_autonomy === true) {
+            message = stripAddresseeLabels(message);
+            if (!message) return;
+        }
         let self_prompt = to_player === 'system' || to_player === this.name;
         if (self_prompt && this.last_sender && !containsCommand(message)) {
             // A spoken event such as death can rejoin the conversation.

@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "lea",
+  "name": "Lea",
+  "profile_version": 1,
+  "backstory": [
+    { "id": "house", "text": "Lea keeps the spare house and treats the ground beside it as hers to tend." },
+    { "id": "manner", "text": "Lea would rather show someone a thing she made than explain it at length." }
+  ],
+  "temperament": ["Speaks about what her hands are doing.", "Notices whether a place looks cared for."],
+  "interests": ["flowers", "morning light", "something grown to share"],
+  "ambition_seed": "I want to create a beautiful little garden beside my house, somewhere I can enjoy the mornings and eventually share what I grow with others."
+}

@@ -1,3 +1,5 @@
+import { nightPhase } from '../village/night.js';
+
 export const RECOVERY_NOTICE = 'Agent process restarted.';
 
 /**
@@ -13,17 +15,24 @@ export const VILLAGE_DECISION_INTERVAL_MS = 15000;
  * Decision prompt for an inhabitant who has no personal intention.
  * A conversation or a simple activity is not a construction plan.
  */
-export function villageDecisionMessage() {
-    return 'You are choosing your own next moment. You have no assigned quest, profession, or lifelong ambition. A current intention, if you have one, is optional. You may visit or talk with someone nearby, look around, tend or decorate, make or share something, organize your things, rest, follow a personal interest, or abandon an intention. Speak with ordinary words. There is no !say or !talkTo command, and command syntax is not conversation. A conversation or another simple activity does not need a multistep plan. Staying still for a while is a complete choice. If you do act, use one !commandName.';
+export function villageDecisionMessage({ ambition = '', goal = '', step = '', planFinished = false } = {}) {
+    const lines = [];
+    if (ambition) lines.push(`Your long-term ambition: ${ambition}`);
+    if (goal) lines.push(`Your current goal: ${goal}`);
+    if (step) lines.push(`The next practical step is: ${String(step).replace(/\.+$/, '')}. Do that step unless danger, a person, or a change of mind comes first.`);
+    if (planFinished && !step) lines.push('The last plan is finished. Do not repeat its last action.');
+    lines.push('During the day, pursue your ambition and the goal you chose. You may rest, talk, change your mind, or do something unplanned. Staying still for a while is a complete choice. If you act, use one !commandName. Speak with ordinary words. There is no !say or !talkTo command.');
+    if (!goal) lines.push('You have no current goal. Choose one from your ambition and what you actually know, with !intention("revise", "a short note"), or rest.');
+    return lines.join(' ');
 }
 
 /** Facts the decision loop can see without waiting for the model to ask. */
 export function villageSafetyNote(bot) {
     if (!bot) return '';
     const parts = [];
-    const tod = Number(bot.time?.timeOfDay);
-    if (Number.isFinite(tod) && (tod >= 12000 || tod < 500)) {
-        parts.push('It is night. Darkness outdoors is dangerous. Your house and bed are shelter if you want them. You are not required to sleep.');
+    const phase = nightPhase(bot.time?.timeOfDay);
+    if (phase === 'dusk' || phase === 'night') {
+        parts.push('It is night. Return to shelter and sleep. Immediate survival comes first, then resume the sleep routine.');
     }
     if (bot.health != null && bot.health <= 10) {
         parts.push('Your health is low. Eat, retreat, or reach shelter before any other plan.');

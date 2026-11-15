@@ -31,6 +31,7 @@ memories: a fact paraphrases a cited episode. A feeling or guess is an interpret
 relationships: only someone who appears in a cited episode.
 stance: one or two sentences on how you meet the morning.
 intentions: if the journal says you want to do something tomorrow, put that desire here in your own words. Zero, one, two, or three. Leave the list empty only when you truly want no particular activity. Visiting, returning, decorating, resting, talking, helping a neighbor, or continuing a personal project are enough. An intention is not a gathering quota or a building plan.
+ambition: omit this field to keep your long-term ambition. Include one sentence only when the ambition itself should change. It does not replace your admitted identity.
 brief: at most ten short lines you would want in the morning. People, a place, a question. Not block counts, recipes, or coordinates.
 
 {"journal":"","memories":[{"op":"upsert","kind":"interpretation","text":"","priority":3,"source_episode_ids":["ep-0001"]}],"relationships":[],"stance":"","intentions":[],"brief":""}`;

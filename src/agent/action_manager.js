@@ -11,6 +11,7 @@ import {
 } from './action_outcome.js';
 import { ConstructionAreaGuard } from './construction_area.js';
 import { describeBuildSurroundings } from './library/construction.js';
+import { intentionWatchKey } from '../village/intentions.js';
 
 export class ActionManager {
     constructor(agent) {
@@ -227,6 +228,15 @@ export class ActionManager {
 
     /** Same intent and blocker, even when the command text or arguments differ. */
     _equivalentBlock(action, params) {
+        if (action === 'intention') {
+            const op = String(params?.action || '').trim().toLowerCase();
+            if (op !== 'abandon' && op !== 'complete') return null;
+            const wanted = intentionWatchKey(op, 'none');
+            for (const [key, candidate] of this.retryBlocks) {
+                if (candidate.behaviorKey === wanted) return { key, block: candidate };
+            }
+            return null;
+        }
         if (action === 'digDown') {
             const anchor = positionAnchor(this.agent.bot);
             if (!anchor) return null;

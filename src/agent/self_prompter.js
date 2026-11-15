@@ -1,6 +1,9 @@
 import { reflect } from './reasoning.js';
+import settings from './settings.js';
 import { VILLAGE_AUTONOMY_PREAMBLE, VILLAGE_DECISION_INTERVAL_MS, villageDecisionMessage, villageSafetyNote } from './startup_goal.js';
-import { noteSpeechTurn, VILLAGE_SPEECH_RECOVERY } from '../village/turn_taking.js';
+import { noteSpeechTurn, villageActionTurn } from '../village/turn_taking.js';
+import { clearIntentionRepetition, readIntentions } from '../village/intentions.js';
+import { prepareVillageTurn } from '../village/goals.js';
 
 const STOPPED = 0
 const ACTIVE = 1
@@ -80,6 +83,11 @@ export class SelfPrompter {
         try {
             while (this._shouldContinue()) {
                 const choosing = this.prompt === VILLAGE_AUTONOMY_PREAMBLE;
+                const direction = choosing ? await prepareVillageTurn(this.agent) : null;
+                if (direction?.paused) {
+                    await this._wait(5000);
+                    continue;
+                }
                 if (choosing) {
                     await this.agent.applyReadyDream?.();
                     await this.agent.orientVillage?.();
@@ -92,32 +100,84 @@ export class SelfPrompter {
                     ? ` Your persistent objective is '${activePlan.objective}'. The current verified step is '${activeStep.description}'.`
                     : '';
                 const stalled = choosing && this.agent._speechLoop?.stalled;
+                let intentionStore = null;
+                if (choosing && settings.village_autonomy === true && settings.agent_data_root) {
+                    try {
+                        intentionStore = readIntentions(settings.agent_data_root);
+                    } catch {
+                        intentionStore = null;
+                    }
+                }
+                const actionTurn = villageActionTurn(this.agent.memory_bank?.getKeys?.() || '', intentionStore);
                 const msg = !choosing
                     ? `You are self-prompting with the broad goal: '${this.prompt}'.${planText} ` +
                     `Retain freedom to react to safety, the environment, and social interaction, but otherwise advance the current plan. ` +
                     `Your next response MUST contain a command with this syntax: !commandName. Respond:`
                     : stalled
-                        ? `${VILLAGE_SPEECH_RECOVERY} ${villageSafetyNote(this.agent.bot)}`.trim()
-                        : `${villageDecisionMessage()} ${villageSafetyNote(this.agent.bot)}`.trim();
+                        ? `${actionTurn} ${villageSafetyNote(this.agent.bot)}`.trim()
+                        : `${villageDecisionMessage({
+                            ambition: direction?.ambition || '',
+                            goal: direction?.goal || '',
+                            step: direction?.step || '',
+                            planFinished: direction?.planFinished === true,
+                        })} ${villageSafetyNote(this.agent.bot)}`.trim();
 
+                const meaningfulEvent = Boolean(this.agent._meaningfulSinceDecision);
+                this.agent._meaningfulSinceDecision = false;
                 if (choosing) this.agent._heardSinceDecision = 0;
-                const used_command = await this.agent.handleMessage('system', msg, -1, { ephemeral: choosing });
+                this.agent._suppressSpeech = Boolean(stalled);
+                let used_command = false;
+                try {
+                    used_command = await this.agent.handleMessage('system', msg, -1, { ephemeral: choosing });
+                } finally {
+                    this.agent._suppressSpeech = false;
+                }
                 if (!this._shouldContinue())
                     break;
 
                 if (choosing) {
-                    if (stalled) {
-                        this.agent._speechLoop = { last: [], stalled: false };
+                    const kind = this.agent._lastDecisionKind || '';
+                    const progressed = kind === 'action' || kind === 'wait' || kind === 'intention';
+                    let delay = this.village_interval;
+                    if (progressed) {
+                        this.agent._speechLoop = { last: [], stalled: false, speechOnly: 0, noProgress: 0 };
+                        this.agent._outgoingSpeech = [];
+                        this.recovery_attempts = 0;
+                        clearIntentionRepetition(this.agent);
+                        delay = this.cooldown;
                     } else {
-                        this.agent._speechLoop = noteSpeechTurn(this.agent._speechLoop, {
-                            text: this.agent._lastDecisionSpeech || '',
-                            acted: Boolean(used_command),
+                        const rejected = kind === 'rejected' || Boolean(this.agent.actions?.repeatSuppressed);
+                        if (this.agent.actions) this.agent.actions.repeatSuppressed = false;
+                        const keepStalled = Boolean(stalled || this.agent._speechLoop?.stalled);
+                        const noted = noteSpeechTurn(this.agent._speechLoop, {
+                            text: kind === 'speech' ? (this.agent._lastDecisionSpeech || '') : '',
+                            acted: false,
+                            meaningfulEvent,
                         });
+                        let noProgress = this.agent._speechLoop?.noProgress || 0;
+                        if (meaningfulEvent) noProgress = 0;
+                        else if (rejected) noProgress += 1;
+                        noted.noProgress = noProgress;
+                        if (keepStalled || (!meaningfulEvent && noProgress >= 2)) noted.stalled = true;
+                        // Speech already waits out the village interval. A recovery
+                        // turn that repeats a rejected command backs off further.
+                        const recoveryFailed = Boolean(stalled && rejected && !meaningfulEvent);
+                        this.agent._speechLoop = noted;
+                        if (recoveryFailed) {
+                            this.recovery_attempts = Math.min(this.recovery_attempts + 1, 8);
+                            delay = Math.min(
+                                this.recovery_backoff * (2 ** (this.recovery_attempts - 1)),
+                                this.max_recovery_backoff
+                            );
+                            console.warn(`[${this.agent.name}] Decision made no progress. Waiting ${delay}ms before the next choice.`);
+                        }
                     }
-                    const heard = () => (this.agent._heardSinceDecision || 0) > 0;
-                    if (!this.agent._speechLoop?.stalled) {
-                        await this._wait(used_command ? this.cooldown : this.village_interval, heard);
-                    }
+                    // A suppressed sentence waits out the interval. It does not
+                    // call the model again in this same turn.
+                    await this._wait(delay, () => {
+                        if (this.agent._speechLoop?.stalled) return false;
+                        return (this.agent._heardSinceDecision || 0) > 0;
+                    });
                     continue;
                 }
 

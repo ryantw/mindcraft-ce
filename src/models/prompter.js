@@ -16,9 +16,29 @@ import { agentDataDir } from '../agent/data_dir.js';
 import { appendVillageContext, renderVillageContext, wantsVillagePrompt } from '../village/context.js';
 import { adaptVillagePrompt, villagePlanPrompt, villageSelfPromptLine } from '../village/voice.js';
 import { watchDayModel } from '../village/day_pulse.js';
+import { activeIntentionText, readIntentions } from '../village/intentions.js';
+import { activeAmbitionText, readAmbitions } from '../village/ambitions.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+function villagePlanningSystem({ name, goal, known, context }) {
+    return [
+        `You are ${name}. The current goal is already chosen: "${goal}".`,
+        'Plan the next few concrete steps that pursue that goal. Do not choose a different objective. Do not invent places, materials, people, or events that are not in the known state.',
+        'A flower is not a full solid block. placeBlockAt, buildLine, and buildPlane cannot place one. collectBlocks harvests the nearest blocks of a type into inventory. placeHere places one block you are holding at your feet, so walk to the spot first.',
+        '',
+        'KNOWN STATE',
+        known || 'No additional notes.',
+        '',
+        context,
+        '',
+        'Return ONLY one JSON object with this shape:',
+        '{"objective":"the current goal exactly","rationale":"why these steps pursue it","materials":[],"steps":[{"id":"short_stable_id","description":"one observable step","action":{"name":"collectBlocks","params":{"type":"oak_log","num":4}},"evidence":{"type":"inventory_min","item":"oak_log","count":4},"requires":[],"requiredResources":[],"prerequisites":[]}]}',
+        '',
+        'The example shows the required fields, not the goal. Use 2 to 6 ordered steps. Action names omit the leading !. Every step must use a command from AVAILABLE ACTION COMMANDS with its exact parameter names. Never plan a step that needs a command you do not have. Prefer commands with structured verification when applicable: collectBlocks, discard, craftRecipe, placeHere, placeBlockAt, buildLine, buildPlane, smeltItem. Allowed evidence types are: inventory_min, inventory_delta, block_at, block_nearby, position_near, and verified_action. For collectBlocks, inventory evidence must be the item that block drops, not an unrelated item. For placeHere, use verified_action for that same action and parameters. Do not use a claim, intention, chat message, or remembered quantity as completion evidence.',
+    ].join('\n');
+}
 
 function parseJsonObject(text) {
     const cleaned = String(text || '')
@@ -411,21 +431,59 @@ export class Prompter {
         prompt = prompt.includes('$PLAN_CONTEXT')
             ? prompt.replaceAll('$PLAN_CONTEXT', context)
             : `${prompt}\n\n${context}`;
-        prompt = await this.replaceStrings(prompt, []);
         let response;
         watchDayModel(true);
+        const villageGoal = settings.village_autonomy === true && settings.agent_data_root
+            ? activeIntentionText(readIntentions(settings.agent_data_root))
+            : '';
+        const villageAmbition = villageGoal
+            ? activeAmbitionText(readAmbitions(settings.agent_data_root))
+            : '';
+        if (villageGoal) {
+            // The goal is already chosen. The survival planning essay asks the
+            // model to invent an objective, which is the wrong request here.
+            let known = '';
+            try {
+                known = await this.replaceStrings('CURRENT GAME STATE\n$STATS\n$INVENTORY\n$KNOWN_FACTS', []);
+            } catch (error) {
+                known = 'Live game state is unavailable.';
+            }
+            const notes = renderVillageContext(settings.agent_data_root, { intention: villageGoal }).text;
+            prompt = villagePlanningSystem({
+                name: this.agent.name,
+                goal: villageGoal,
+                known: [known, notes].filter(Boolean).join('\n\n'),
+                context,
+            });
+        } else {
+            prompt = await this.replaceStrings(prompt, []);
+        }
+        const planningRequest = villageGoal
+            ? `Your current goal is already chosen: "${villageGoal}". Your long-term ambition, for context only: "${villageAmbition || 'none recorded'}". Plan the next few concrete steps that pursue that goal. Do not invent places, materials, or events you have not seen. Set objective to the current goal exactly. Return only the JSON object.`
+            : 'Choose your objective and plan now. Return only the JSON object.';
         try {
         if (typeof this.chat_model.complete === 'function') {
             // One-shot call with room for a multi-step JSON plan (the chat
             // profile caps output at 512 tokens, which truncates build plans)
             // and a timeout that tolerates five agents sharing one Ollama.
+            // qwen3 thinking is counted inside num_predict. A village plan that
+            // thought with a 2048 budget returned an empty answer, so this
+            // call does not think. The JSON has to be the whole response.
             const result = await this.chat_model.complete(
-                'Choose your objective and plan now. Return only the JSON object.',
+                planningRequest,
                 prompt,
-                { think: false, keep_alive: -1, timeout_ms: 120000, max_predict: 1024, options: { num_predict: 1024 } }
+                {
+                    think: false,
+                    keep_alive: -1,
+                    timeout_ms: villageGoal ? 180000 : 120000,
+                    max_predict: 1024,
+                    options: { num_predict: 1024 },
+                }
             );
             response = result?.content ?? '';
-            if (result?.done_reason === 'length') {
+            if (!String(response).trim()) {
+                console.warn(`[${this.agent.name}] Planning returned no answer. done_reason=${result?.done_reason || 'unknown'} generated_tokens=${result?.eval_count ?? 'unknown'} thinking_chars=${(result?.thinking || '').length}`);
+            } else if (result?.done_reason === 'length') {
                 console.warn(`[${this.agent.name}] Planning response hit the token limit and may be truncated.`);
             }
         } else {
@@ -440,6 +498,7 @@ export class Prompter {
             console.warn(`[${this.agent.name}] Could not parse a valid persistent plan:`, response);
             return null;
         }
+        if (villageGoal) proposal.objective = villageGoal;
         return proposal;
     }
 

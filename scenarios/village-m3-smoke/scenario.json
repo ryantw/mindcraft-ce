@@ -11,7 +11,7 @@
   "models": {
     "day": {
       "api": "ollama",
-      "model": "qwen3:8b",
+      "model": "qwen3:14b",
       "params": {
         "think": false,
         "keep_alive": -1,
@@ -38,6 +38,7 @@
   },
   "inhabitants": [
     "inhabitants/wynn.json",
+    "inhabitants/lea.json",
     "inhabitants/holt.json",
     "inhabitants/nia.json"
   ],

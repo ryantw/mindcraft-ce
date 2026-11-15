@@ -39,11 +39,21 @@ function speechKey(speaker, message) {
     return `${String(speaker).toLowerCase()}|${body}`;
 }
 
+/**
+ * Directed-message labels are routing, not speech.
+ * Repeated "(To Cass)" prefixes are the same sentence.
+ */
+export function stripAddresseeLabels(message) {
+    return String(message ?? '')
+        .replace(/\s*\(To [^)]+\)/gi, ' ')
+        .replace(/[ \t]{2,}/g, ' ')
+        .trim();
+}
+
 /** Public mirrors prefix the same sentence. Both copies are one utterance. */
 export function comparableSpeech(message) {
-    return String(message ?? '')
-        .replace(/^\(To [^)]+\)\s*/i, '')
-        .replace(/^\(FROM OTHER BOT\)/i, '')
+    return stripAddresseeLabels(message)
+        .replace(/\(from other bot\)/gi, ' ')
         .replace(/\s+/g, ' ')
         .trim()
         .toLowerCase();

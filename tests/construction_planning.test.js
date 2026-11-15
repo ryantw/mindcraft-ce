@@ -76,6 +76,15 @@ describe('build plans are validated against what the build commands can do', () 
         assert.match(problems, /claims to build a structure .* no step uses a construction command/);
     });
 
+    test('placing one flower beside the house is not a structure', () => {
+        const manager = new PlanManager(makeAgent(), dir);
+        const problems = manager.validateProposal({
+            objective: 'Begin planting flowers in the garden beside my house',
+            steps: [step('plant', 'placeHere', { type: 'dandelion' }, { description: 'Place a dandelion beside my house' })],
+        });
+        assert.deepEqual(problems, []);
+    });
+
     test('!placeHere cannot stand in for walls', () => {
         const manager = new PlanManager(makeAgent({ cobblestone: 300 }), dir);
         const problems = manager.validateProposal({
