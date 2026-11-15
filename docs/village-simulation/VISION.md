@@ -1,10 +1,10 @@
 # Village simulation vision
 
-Spec-Version: 0.3.0
-Status: Accepted design. Milestone 1 is implemented. Later milestones are not.
+Spec-Version: 0.4.0
+Status: Accepted design. Milestones 1 and 2 are implemented. Later milestones are not.
 Date: 2026-11-15
 
-Revised from 0.2.0. The product intent is unchanged. Milestone 1 now loads scenarios, admits inhabitants, and isolates their runtime. Dreams, provisioning, and live permadeath remain later milestones.
+Revised from 0.3.0. The product intent is unchanged. Milestone 2 furnishes a separate plains village. Dreams and live permadeath remain later milestones.
 
 This document is the product intent for an autonomous Minecraft social simulation built on Mindcraft CE. It does not authorize implementation by itself. Architecture, milestones, and file schemas are in the sibling documents.
 

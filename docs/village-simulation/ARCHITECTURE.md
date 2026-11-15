@@ -1,7 +1,7 @@
 # Village simulation architecture
 
-Spec-Version: 0.3.0
-Status: Accepted design. Milestone 1 is implemented. Later milestones are not.
+Spec-Version: 0.4.0
+Status: Accepted design. Milestones 1 and 2 are implemented. Later milestones are not.
 Date: 2026-11-15
 
 Revised from 0.1.0. See [VISION.md](VISION.md) for the product changes. This document now separates lifecycle from activity, makes plots the only home assignment, and treats dreaming as a durable queue rather than a life state.
@@ -255,7 +255,7 @@ Open and required before milestone 3 is finished: today's multi-agent path ignor
 - Another inhabitant can record a death episode only through their own perception or through conversation that itself came from someone who had an episode.
 - A later disconnect of a living inhabitant still uses the absent state and the existing restart-is-not-a-goal rule.
 
-**Resources.** Homes, beds, food, tools, and paths are placed in the world before or at scenario start, by an operator-controlled provisioning step in milestone 2. Agents are not asked to bootstrap that village with `buildPlane`. After a house has been provisioned once, chests are ordinary containers. Food can be eaten. Tools can break. Restart, death, and absence do not refill them. Vacant plots are not stocked by the agent loop. How the blocks are placed is an open milestone 2 choice; the plot list is the contract.
+**Resources.** Homes, beds, food, tools, and paths are placed before any inhabitant is started, by `node scripts/village/provision.js` against the isolated village server. The village-alpha world is the plains village from seed `village-alpha`, with chests and missing fixtures added once from `site.json` and the supply manifest. Agents are not asked to bootstrap that village with `buildPlane`. After a house has been provisioned once, chests are ordinary containers. Food can be eaten. Tools can break. Restart, death, and absence do not refill them. Vacant plots are not stocked. The plot list remains the home assignment.
 
 ## Observer
 

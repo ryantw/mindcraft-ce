@@ -1,0 +1,38 @@
+# Isolated Paper server for the village-alpha scenario.
+# The survival server is /home/ryan/minecraft/compose.yaml (container ai-village,
+# host port 25565, data directory minecraft-data). This file does not start it.
+name: village-alpha
+services:
+  village:
+    image: itzg/minecraft-server:java21
+    container_name: village-alpha
+    ports:
+      - "0.0.0.0:25566:25565"
+      - "127.0.0.1:25576:25575"
+    environment:
+      EULA: "TRUE"
+      TYPE: PAPER
+      VERSION: "1.21.6"
+      MEMORY: "4G"
+      ONLINE_MODE: "FALSE"
+      MODE: survival
+      DIFFICULTY: normal
+      FORCE_GAMEMODE: "true"
+      MAX_PLAYERS: "20"
+      VIEW_DISTANCE: "8"
+      SIMULATION_DISTANCE: "6"
+      SPAWN_PROTECTION: "0"
+      ENABLE_RCON: "true"
+      RCON_PORT: "25575"
+      RCON_PASSWORD: "${VILLAGE_RCON_PASSWORD:?Set VILLAGE_RCON_PASSWORD in services/village-alpha/.env}"
+      MOTD: "Village Alpha"
+      LEVEL: world
+      SEED: village-alpha
+      ENABLE_COMMAND_BLOCK: "false"
+      USE_AIKAR_FLAGS: "true"
+      STOP_SERVER_ANNOUNCE_DELAY: "0"
+      UID: "1000"
+      GID: "1000"
+    volumes:
+      - ${VILLAGE_DATA_DIR:?Set VILLAGE_DATA_DIR in services/village-alpha/.env}:/data
+    restart: unless-stopped

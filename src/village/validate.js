@@ -90,7 +90,7 @@ function validateInhabitant(profile, fileLabel) {
 }
 
 function validateVillage(village) {
-    exactKeys(village, ['schema_version', 'id', 'spawn_dimension', 'plots', 'public', 'provisions', 'paths', 'notes'], 'village');
+    exactKeys(village, ['schema_version', 'id', 'spawn_dimension', 'plots', 'public', 'provisions', 'paths', 'notes', 'provision'], 'village');
     requireKeys(village, ['schema_version', 'id', 'spawn_dimension', 'plots', 'public', 'provisions', 'paths'], 'village');
     if (village.schema_version !== 1) fail('village schema_version must be 1.');
     plainString(village.id, 'village.id');
@@ -99,8 +99,8 @@ function validateVillage(village) {
     const plotIds = new Set();
     const occupants = new Map();
     for (const plot of village.plots) {
-        exactKeys(plot, ['id', 'occupant', 'home_marker', 'bed', 'chest', 'door', 'notes'], `plot ${plot?.id || ''}`);
-        requireKeys(plot, ['id', 'occupant', 'home_marker', 'bed', 'chest', 'door'], `plot ${plot?.id || ''}`);
+        exactKeys(plot, ['id', 'occupant', 'home_marker', 'bed', 'chest', 'door', 'crafting_table', 'furnace', 'notes'], `plot ${plot?.id || ''}`);
+        requireKeys(plot, ['id', 'occupant', 'home_marker', 'bed', 'chest', 'door', 'crafting_table', 'furnace'], `plot ${plot?.id || ''}`);
         if (!ID_PATTERN.test(plot.id)) fail(`Plot id '${plot.id}' must be lowercase words separated by hyphens.`);
         if (plotIds.has(plot.id)) fail(`Duplicate plot id '${plot.id}'.`);
         plotIds.add(plot.id);
@@ -111,34 +111,53 @@ function validateVillage(village) {
             if (occupants.has(plot.occupant)) fail(`Conflicting home assignment: '${plot.occupant}' is listed on more than one plot.`);
             occupants.set(plot.occupant, plot.id);
         }
-        for (const point of ['home_marker', 'bed', 'chest', 'door']) coordinate(plot[point], `plot ${plot.id} ${point}`);
+        for (const point of ['home_marker', 'bed', 'chest', 'door', 'crafting_table', 'furnace']) coordinate(plot[point], `plot ${plot.id} ${point}`);
     }
     if (!Array.isArray(village.public)) fail('village.public must be a list.');
     const publicIds = new Set();
     for (const place of village.public) {
-        exactKeys(place, ['id', 'marker', 'notes'], `public place ${place?.id || ''}`);
+        exactKeys(place, ['id', 'marker', 'notes', 'chest'], `public place ${place?.id || ''}`);
         requireKeys(place, ['id', 'marker'], `public place ${place?.id || ''}`);
         if (!ID_PATTERN.test(place.id)) fail(`Public place id '${place.id}' is invalid.`);
         if (publicIds.has(place.id) || plotIds.has(place.id)) fail(`Duplicate place id '${place.id}'.`);
         publicIds.add(place.id);
         coordinate(place.marker, `public place ${place.id}`);
+        if (place.chest !== undefined) coordinate(place.chest, `public place ${place.id} chest`);
     }
-    exactKeys(village.provisions, ['per_home', 'refill'], 'provisions');
+    exactKeys(village.provisions, ['per_home', 'refill', 'public_chest'], 'provisions');
     requireKeys(village.provisions, ['per_home', 'refill'], 'provisions');
     if (village.provisions.refill !== 'never') fail('provisions.refill must be "never".');
-    exactKeys(village.provisions.per_home, ['food', 'tools', 'also'], 'provisions.per_home');
+    exactKeys(village.provisions.per_home, ['food', 'tools', 'also', 'armor', 'materials', 'personal_cycle', 'vacant_chest'], 'provisions.per_home');
     requireKeys(village.provisions.per_home, ['food', 'tools', 'also'], 'provisions.per_home');
     if (!Array.isArray(village.provisions.per_home.food)) fail('provisions.per_home.food must be a list.');
-    for (const food of village.provisions.per_home.food) {
-        exactKeys(food, ['item', 'count'], 'provision food');
-        requireKeys(food, ['item', 'count'], 'provision food');
-        plainString(food.item, 'provision food item');
-        if (!isInteger(food.count) || food.count < 1) fail('provision food count must be a positive integer.');
+    const stacks = [
+        ...village.provisions.per_home.food.map(food => ['provision food', food]),
+        ...(village.provisions.per_home.materials || []).map(item => ['provision material', item]),
+        ...(village.provisions.per_home.vacant_chest || []).map(item => ['vacant chest stack', item]),
+        ...(village.provisions.public_chest || []).map(item => ['public chest stack', item]),
+    ];
+    for (const [label, stack] of stacks) {
+        exactKeys(stack, ['item', 'count'], label);
+        requireKeys(stack, ['item', 'count'], label);
+        plainString(stack.item, `${label} item`);
+        if (!isInteger(stack.count) || stack.count < 1 || stack.count > 64) fail(`${label} count must be an integer from 1 to 64.`);
     }
-    for (const listName of ['tools', 'also']) {
-        if (!Array.isArray(village.provisions.per_home[listName]) || village.provisions.per_home[listName].some(item => typeof item !== 'string' || !item.trim())) {
+    for (const listName of ['tools', 'also', 'armor', 'personal_cycle']) {
+        const list = village.provisions.per_home[listName];
+        if (list === undefined) continue;
+        if (!Array.isArray(list) || list.some(item => typeof item !== 'string' || !item.trim())) {
             fail(`provisions.per_home.${listName} must be a list of strings.`);
         }
+    }
+    if (village.provision !== undefined) {
+        exactKeys(village.provision, ['version', 'method', 'seed', 'floor_block_y', 'origin', 'verified_at'], 'provision');
+        requireKeys(village.provision, ['version', 'method', 'seed', 'floor_block_y', 'origin'], 'provision');
+        if (!isInteger(village.provision.version) || village.provision.version < 1) fail('provision.version must be an integer >= 1.');
+        plainString(village.provision.method, 'provision.method');
+        plainString(village.provision.seed, 'provision.seed');
+        if (!isInteger(village.provision.floor_block_y)) fail('provision.floor_block_y must be an integer.');
+        coordinate(village.provision.origin, 'provision.origin');
+        if (village.provision.verified_at !== undefined) plainString(village.provision.verified_at, 'provision.verified_at');
     }
     if (!Array.isArray(village.paths)) fail('village.paths must be a list.');
     const known = new Set([...plotIds, ...publicIds]);

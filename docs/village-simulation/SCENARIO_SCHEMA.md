@@ -1,6 +1,6 @@
 # Village simulation scenario schema
 
-Spec-Version: 0.3.0
+Spec-Version: 0.4.0
 Status: Schema version 1 is loaded by the application.
 Date: 2026-11-15
 
@@ -160,7 +160,9 @@ A description the operator and the tests can check. It is not a world editor.
       "home_marker": [0, 64, 0],
       "bed": [2, 64, 1],
       "chest": [1, 64, 2],
-      "door": [0, 64, -1]
+      "door": [0, 64, -1],
+      "crafting_table": [3, 64, 1],
+      "furnace": [3, 64, 2]
     },
     {
       "id": "plot-west",
@@ -168,7 +170,9 @@ A description the operator and the tests can check. It is not a world editor.
       "home_marker": [-20, 64, 0],
       "bed": [-18, 64, 1],
       "chest": [-19, 64, 2],
-      "door": [-20, 64, -1]
+      "door": [-20, 64, -1],
+      "crafting_table": [-17, 64, 1],
+      "furnace": [-17, 64, 2]
     }
   ],
   "public": [
@@ -195,10 +199,10 @@ Rules:
 - Setting `occupant` from `null` to a new inhabitant id is how admission assigns a vacant house. No application change.
 - An occupant who is `dead`, `absent`, or removed from the active list stays the occupant. Schema version 1 has no transfer. A single file cannot list the same inhabitant on two plots. A new inhabitant may be placed on a plot whose `occupant` is `null`.
 - Editing a plot so that an already admitted life points at a different house does not rewrite `identity.json`. Admission records `home_mismatch` and the snapshot remains the assignment. Startup is not refused for that mismatch.
-- Coordinates are the operator's contract with the world save. How the blocks get placed is the milestone 2 authoring choice, not an agent action. Provisioning a vacant plot is allowed and does not require an inhabitant.
+- Coordinates are the operator's contract with the world save. For village-alpha they were read from the generated plains village and are applied by `scripts/village/provision.js` from `site.json`. That is an operator action. Provisioning a vacant plot is allowed and does not require an inhabitant.
 - `refill` must be `"never"` in schema version 1. Restart and death must not restock containers.
 - Possessions already in a house are left alone when the occupant dies, disconnects, or is no longer listed. The scenario runner must not delete or regenerate them.
-- `crafting_table` and `furnace` may be blocks in the house rather than items in the chest. The checklist in the roadmap is the requirement; this example is one valid shape.
+- `crafting_table` and `furnace` are required coordinates. They are blocks in the house. The supply manifest does not have to duplicate them as chest items.
 - Public storage, if any, is listed explicitly. An unlisted chest is not a shared official store.
 
 ## Runtime directory

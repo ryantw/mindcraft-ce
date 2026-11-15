@@ -43,6 +43,8 @@ function writeScenario(dir, people, { vacant = 0, mutate, port = 25566 } = {}) {
         bed: [index, 64, 1],
         chest: [index, 64, 2],
         door: [index, 64, -1],
+        crafting_table: [index, 64, 3],
+        furnace: [index, 64, 4],
     }));
     for (let index = 0; index < vacant; index++) {
         plots.push({
@@ -52,6 +54,8 @@ function writeScenario(dir, people, { vacant = 0, mutate, port = 25566 } = {}) {
             bed: [100 + index, 64, 1],
             chest: [100 + index, 64, 2],
             door: [100 + index, 64, -1],
+            crafting_table: [100 + index, 64, 3],
+            furnace: [100 + index, 64, 4],
         });
     }
     const scenario = {
@@ -117,13 +121,14 @@ test('valid scenarios accept one, five, and fifteen inhabitants', () => {
     }
 });
 
-test('the sample village scenario is configuration for five new inhabitants and one vacant house', () => {
+test('the sample village scenario is configuration for five new inhabitants and vacant houses', () => {
     const bundle = loadScenario(path.join('scenarios', 'village-alpha'), { reservedNames: RESERVED, forLaunch: true });
     assert.deepEqual(bundle.inhabitants.map(profile => profile.name), ['Ione', 'Cass', 'Rufus', 'Nell', 'Bram']);
-    assert.equal(bundle.village.plots.filter(plot => plot.occupant === null).length, 1);
+    assert.equal(bundle.village.plots.filter(plot => plot.occupant === null).length, 3);
     assert.equal(bundle.scenario.connection.port, 25566);
     assert.equal(bundle.scenario.settings.allow_insecure_coding, false);
-    assert.match(bundle.village.notes, /No physical village has been built or verified/i);
+    assert.ok(bundle.village.plots.every(plot => plot.crafting_table && plot.furnace && plot.bed && plot.chest));
+    assert.equal(bundle.village.provisions.refill, 'never');
 });
 
 test('a sixth inhabitant is admitted by data changes alone', () => {

@@ -1,0 +1,172 @@
+{
+  "method": "vanilla-plains-village",
+  "seed": "village-alpha",
+  "origin": [-458, 73, -715],
+  "floor_block_y": 71,
+  "notes": "Measured from the plains village this seed generates. place entries are the only blocks provisioning may add. Existing beds, doors, paths, crops, and the pond stay.",
+  "houses": [
+    {
+      "plot_id": "plot-ione",
+      "bed": [-497, 73, -761],
+      "door": [-496, 73, -759],
+      "home_marker": [-496, 73, -760],
+      "chest": [-495, 73, -761],
+      "crafting_table": [-497, 73, -760],
+      "furnace": [-495, 73, -760],
+      "lantern": [-497, 74, -760],
+      "expect": { "bed": "yellow_bed", "door": "oak_door" },
+      "place": [
+        { "at": [-495, 73, -761], "block": "chest", "allow": ["air", "chest"] },
+        { "at": [-495, 73, -760], "block": "furnace", "allow": ["air", "furnace"] },
+        { "at": [-497, 73, -760], "block": "crafting_table", "allow": ["air", "crafting_table"] },
+        { "at": [-497, 74, -760], "block": "lantern", "allow": ["air", "lantern"] }
+      ]
+    },
+    {
+      "plot_id": "plot-cass",
+      "bed": [-469, 85, -728],
+      "door": [-471, 85, -727],
+      "home_marker": [-470, 85, -727],
+      "chest": [-469, 85, -726],
+      "crafting_table": [-468, 85, -727],
+      "furnace": [-468, 85, -726],
+      "lantern": [-468, 86, -727],
+      "expect": { "bed": "yellow_bed", "door": "oak_door" },
+      "place": [
+        { "at": [-469, 85, -726], "block": "chest", "allow": ["air", "chest"] },
+        { "at": [-468, 85, -726], "block": "furnace", "allow": ["oak_stairs", "furnace"] },
+        { "at": [-468, 85, -727], "block": "crafting_table", "allow": ["air", "crafting_table"] },
+        { "at": [-468, 86, -727], "block": "lantern", "allow": ["air", "lantern"] }
+      ]
+    },
+    {
+      "plot_id": "plot-rufus",
+      "bed": [-426, 69, -710],
+      "door": [-427, 69, -712],
+      "home_marker": [-427, 69, -711],
+      "chest": [-426, 69, -711],
+      "crafting_table": [-428, 69, -709],
+      "furnace": [-428, 69, -711],
+      "lantern": [-428, 70, -709],
+      "expect": { "bed": "white_bed", "door": "oak_door" },
+      "place": [
+        { "at": [-426, 69, -711], "block": "chest", "allow": ["air", "chest"] },
+        { "at": [-428, 69, -711], "block": "furnace", "allow": ["air", "furnace"] },
+        { "at": [-428, 69, -709], "block": "crafting_table", "allow": ["oak_stairs", "crafting_table"] },
+        { "at": [-428, 70, -709], "block": "lantern", "allow": ["air", "lantern"] }
+      ]
+    },
+    {
+      "plot_id": "plot-nell",
+      "bed": [-419, 73, -733],
+      "door": [-418, 73, -731],
+      "home_marker": [-418, 73, -732],
+      "chest": [-417, 73, -733],
+      "crafting_table": [-419, 73, -732],
+      "furnace": [-417, 73, -732],
+      "lantern": [-419, 74, -732],
+      "expect": { "bed": "white_bed", "door": "oak_door" },
+      "place": [
+        { "at": [-417, 73, -733], "block": "chest", "allow": ["air", "chest"] },
+        { "at": [-417, 73, -732], "block": "furnace", "allow": ["air", "furnace"] },
+        { "at": [-419, 73, -732], "block": "crafting_table", "allow": ["air", "crafting_table"] },
+        { "at": [-419, 74, -732], "block": "lantern", "allow": ["air", "lantern"] }
+      ]
+    },
+    {
+      "plot_id": "plot-bram",
+      "bed": [-398, 67, -710],
+      "door": [-400, 67, -712],
+      "home_marker": [-400, 67, -711],
+      "chest": [-401, 67, -709],
+      "crafting_table": [-398, 67, -709],
+      "furnace": [-401, 67, -710],
+      "lantern": [-398, 68, -709],
+      "expect": { "bed": "yellow_bed", "door": "oak_door" },
+      "place": [
+        { "at": [-401, 67, -709], "block": "chest", "allow": ["chest"] },
+        { "at": [-401, 67, -710], "block": "furnace", "allow": ["air", "furnace"] },
+        { "at": [-398, 67, -709], "block": "crafting_table", "allow": ["oak_stairs", "crafting_table"] },
+        { "at": [-398, 68, -709], "block": "lantern", "allow": ["air", "lantern"] }
+      ]
+    },
+    {
+      "plot_id": "plot-vacant",
+      "bed": [-479, 85, -726],
+      "door": [-477, 85, -728],
+      "home_marker": [-478, 85, -728],
+      "chest": [-480, 85, -729],
+      "crafting_table": [-480, 85, -726],
+      "furnace": [-479, 85, -729],
+      "lantern": [-480, 86, -726],
+      "expect": { "bed": "yellow_bed", "door": "oak_door" },
+      "place": [
+        { "at": [-480, 85, -729], "block": "chest", "allow": ["chest"] },
+        { "at": [-479, 85, -729], "block": "furnace", "allow": ["air", "furnace"] },
+        { "at": [-480, 85, -726], "block": "crafting_table", "allow": ["oak_stairs", "crafting_table"] },
+        { "at": [-480, 86, -726], "block": "lantern", "allow": ["air", "lantern"] }
+      ]
+    },
+    {
+      "plot_id": "plot-vacant-2",
+      "bed": [-454, 64, -774],
+      "door": [-453, 64, -772],
+      "home_marker": [-453, 64, -773],
+      "chest": [-452, 64, -775],
+      "crafting_table": [-452, 64, -773],
+      "furnace": [-452, 64, -774],
+      "lantern": [-452, 65, -773],
+      "expect": { "bed": "white_bed", "door": "oak_door" },
+      "place": [
+        { "at": [-452, 64, -775], "block": "chest", "allow": ["cobblestone_stairs", "chest"] },
+        { "at": [-452, 64, -774], "block": "furnace", "allow": ["cobblestone_stairs", "furnace"] },
+        { "at": [-452, 64, -773], "block": "crafting_table", "allow": ["cobblestone_stairs", "crafting_table"] },
+        { "at": [-452, 65, -773], "block": "lantern", "allow": ["air", "lantern"] }
+      ]
+    },
+    {
+      "plot_id": "plot-vacant-3",
+      "bed": [-463, 64, -774],
+      "door": [-462, 64, -772],
+      "home_marker": [-462, 64, -773],
+      "chest": [-461, 64, -774],
+      "crafting_table": [-463, 64, -773],
+      "furnace": [-461, 64, -773],
+      "lantern": [-463, 65, -773],
+      "expect": { "bed": "yellow_bed", "door": "oak_door" },
+      "place": [
+        { "at": [-461, 64, -774], "block": "chest", "allow": ["air", "chest"] },
+        { "at": [-461, 64, -773], "block": "furnace", "allow": ["air", "furnace"] },
+        { "at": [-463, 64, -773], "block": "crafting_table", "allow": ["air", "crafting_table"] },
+        { "at": [-463, 65, -773], "block": "lantern", "allow": ["air", "lantern"] }
+      ]
+    }
+  ],
+  "public": [
+    { "id": "square", "marker": [-460, 72, -715], "notes": "Bell meeting point. The bell block is two steps east of this standing spot." },
+    {
+      "id": "common-house",
+      "marker": [-406, 73, -732],
+      "chest": [-407, 73, -734],
+      "notes": "The generated smithy beside the fields. Shared chest is finite and is not refilled.",
+      "place": [
+        { "at": [-407, 73, -734], "block": "chest", "allow": ["air", "chest"] },
+        { "at": [-406, 73, -734], "block": "lantern", "allow": ["air", "lantern"] }
+      ]
+    },
+    { "id": "garden", "marker": [-426, 74, -734], "notes": "Standing spot on the dirt edge of the crop field. Wheat, carrots, potatoes, and beetroots are already planted." },
+    { "id": "well", "marker": [-430, 74, -733], "notes": "Log border of the pond next to the fields." },
+    { "id": "pasture", "marker": [-468, 78, -742], "notes": "Open grass where the generated village's pigs already wander. Not a fenced pen." }
+  ],
+  "decor": [
+    { "at": [-420, 73, -730], "block": "air", "allow": ["tall_grass", "air"] },
+    { "at": [-420, 72, -730], "block": "poppy", "allow": ["tall_grass", "air", "poppy"] },
+    { "at": [-416, 72, -730], "block": "dandelion", "allow": ["short_grass", "dandelion"] },
+    { "at": [-424, 74, -735], "block": "poppy", "allow": ["air", "poppy"] },
+    { "at": [-424, 74, -734], "block": "dandelion", "allow": ["air", "dandelion"] },
+    { "at": [-459, 72, -715], "block": "lantern", "allow": ["air", "lantern"] },
+    { "at": [-457, 72, -715], "block": "lantern", "allow": ["air", "lantern"] },
+    { "at": [-458, 72, -716], "block": "lantern", "allow": ["air", "lantern"] },
+    { "at": [-458, 72, -714], "block": "lantern", "allow": ["air", "lantern"] }
+  ]
+}

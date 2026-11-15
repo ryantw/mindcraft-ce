@@ -4,14 +4,16 @@ Mindcraft CE is an experimental Minecraft agent stack (Mineflayer plus a local o
 
 ## Village simulation
 
-A separate social-simulation experiment is specified in Spec-Version 0.3.0. Milestone 1 (scenario load, isolated runtime, admission, lifecycle, and autonomy without a settlement goal) is implemented. Milestones 2–7 are not. Before adding or changing anything that affects inhabitants, scenarios, memory, sleep, death, or the observer view of those lives, read:
+A separate social-simulation experiment is specified in Spec-Version 0.4.0. Milestones 1 and 2 are implemented. Milestones 3–7 are not. Milestone 2's world is a separate Paper 1.21.6 server, not the survival server. Before adding or changing anything that affects inhabitants, scenarios, memory, sleep, death, or the observer view of those lives, read:
 
 - `docs/village-simulation/VISION.md`
 - `docs/village-simulation/ARCHITECTURE.md`
 - `docs/village-simulation/ROADMAP.md`
 - `docs/village-simulation/SCENARIO_SCHEMA.md`
 
-Do not implement a later milestone unless the task names it. Do not start `node main.js --scenario` unless the task asks for a live run.
+Do not implement a later milestone unless the task names it. Do not start `node main.js --scenario` unless the task asks for a live run. Do not run that process at the same time as `node main.js`: both use MindServer port 8080 and viewer ports from 3000.
+
+The village server is `services/village-alpha/compose.yaml`. Start and stop it with `docker compose --env-file services/village-alpha/.env -f services/village-alpha/compose.yaml up -d` and the same file with `stop`. It listens on `127.0.0.1:25566` (game) and `127.0.0.1:25576` (RCON). The world directory and RCON password stay in the gitignored `.env` and must not be committed. Join as any offline name except the inhabitant names; the first join of an inhabitant name is moved to that person's home once and then tagged so a restart does not move them again. `node scripts/village/provision.js` refuses to run when a receipt already exists.
 
 Select a scenario with `node main.js --scenario village-alpha` or `node main.js --scenario scenarios/village-alpha`. That does not launch `settings.profiles`. To add an inhabitant, add `scenarios/<id>/inhabitants/<inhabitant_id>.json`, list that relative path in `scenario.json`, and optionally set a vacant plot's `occupant` from `null` to that id. Admission happens the next time that scenario process starts. Removing a person from `scenario.json` must not delete `runtime/scenarios/<id>/<inhabitant_id>/` and must not mark them dead.
 
