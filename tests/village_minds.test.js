@@ -16,10 +16,11 @@ import { appendEpisode, readEpisodes, splitEpisodes } from '../src/village/episo
 import { expressStance, readRelationships } from '../src/village/relationships.js';
 import { readKnowledge } from '../src/village/knowledge.js';
 import { renderVillageContext, SHARED_GAMEPLAY_LINE } from '../src/village/context.js';
-import { acceptInWorldSpeech, speakerDistance } from '../src/village/locality.js';
+import { acceptInWorldSpeech, claimSpeech, resetSpeechClaims, speakerDistance } from '../src/village/locality.js';
 import { buildDeathFacts, recordDeathKnowledge, recordVerifiedDeath } from '../src/village/death.js';
 import { episodeForAction } from '../src/village/experience.js';
-import { assertRemainsTarget, planRemains, readableRemains } from '../src/village/remains.js';
+import { assertRemainsTarget, chooseEvidenceColumn, interpretBlockProbe, placeConfiguredRemains, planRemains, readableRemains } from '../src/village/remains.js';
+import { writeLife } from '../src/village/life.js';
 import { activityNeedsPlan, VILLAGE_AUTONOMY_PREAMBLE, villageDecisionMessage } from '../src/agent/startup_goal.js';
 
 const RESERVED = ['Finn', 'Sawyer', 'Milo', 'Jasper', 'Rowan'];
@@ -300,6 +301,23 @@ test('private relationships can disagree and can name a human', () => {
     }
 });
 
+test('a normal block probe is not treated as an unloaded chunk', () => {
+    assert.deepEqual(interpretBlockProbe('Test passed', 'air'), { loaded: true, block: 'air' });
+    assert.deepEqual(interpretBlockProbe('Test failed', 'air'), { loaded: true, block: null });
+    assert.deepEqual(interpretBlockProbe('That position is not loaded', 'air'), { loaded: false, block: null });
+    assert.equal(interpretBlockProbe('The target block is not a block entity', 'air').loaded, false);
+});
+
+test('the same utterance is claimed once across public and direct copies', () => {
+    resetSpeechClaims();
+    assert.equal(claimSpeech('Holt', 'The bell is loud today.', 1000), true);
+    assert.equal(claimSpeech('Holt', '(To Wynn) The bell is loud today.', 1200), false);
+    assert.equal(claimSpeech('Holt', '(FROM OTHER BOT)The bell is loud today.', 1400), false);
+    assert.equal(claimSpeech('Nia', 'The bell is loud today.', 1400), true);
+    assert.equal(claimSpeech('Holt', 'The bell is loud today.', 5000), true);
+    resetSpeechClaims();
+});
+
 test('local speech does not reach a remote listener', async () => {
     const near = { x: 0, y: 64, z: 0 };
     const far = { x: 0, y: 64, z: 80 };
@@ -472,8 +490,10 @@ test('remains plans are idempotent and refuse unsafe sites and protected worlds'
     assert.equal(planRemains({ position: { x: 0, y: 64, z: 0 }, site: { block: 'chest' } }).reason, 'would overwrite belongings or a fixture');
     assert.equal(planRemains({ position: { x: 0, y: 64, z: 0 }, site: { block: 'water' } }).status, 'planned');
     assert.equal(planRemains({ position: { x: 0, y: 64, z: 0 }, site: null }).reason, 'unloaded');
-    assert.equal(readableRemains({ tags: ['village_remains'], customName: 'Ada', id: 4 }).label, 'Ada');
-    assert.equal(readableRemains({ name: 'armor_stand', customName: 'Ada' }), null);
+    assert.equal(readableRemains({ name: 'armor_stand', metadata: [{}, {}, { value: '{"text":"Ada"}' }], id: 4 }).label, 'Ada');
+    assert.equal(readableRemains({ name: 'armor_stand', customName: 'Ada', id: 5 }).label, 'Ada');
+    assert.equal(readableRemains({ name: 'armor_stand', tags: ['village_remains'] }), null);
+    assert.equal(readableRemains({ name: 'player', customName: 'Ada' }), null);
     assert.throws(() => assertRemainsTarget({ container: 'ai-village', dataDir: '/tmp/other' }), /survival/);
     assert.throws(() => assertRemainsTarget({ container: 'village-alpha', dataDir: '/tmp/other' }), /Village Alpha/);
     assert.equal(assertRemainsTarget({ container: 'village-m3-smoke', dataDir: '/tmp/smoke' }), true);
@@ -502,6 +522,50 @@ test('a fifteenth inhabitant uses the same identity, home, and memory path', () 
             at: NOW,
         });
         assert.equal(readEpisodes(first.directory).episodes.length, 0);
+    } finally {
+        rmSync(parent, { recursive: true, force: true });
+    }
+});
+
+test('death remains are chosen without overwriting a chest and are not sent to Village Alpha', () => {
+    const feet = { x: 1.4, y: 64.2, z: -3.2 };
+    assert.deepEqual(chooseEvidenceColumn(feet, { '1,64,-4': 'air', '1,65,-4': 'air' }).y, 64);
+    assert.equal(chooseEvidenceColumn(feet, { '1,64,-4': 'chest', '1,65,-4': 'air' }).y, 65);
+    assert.equal(chooseEvidenceColumn(feet, { '1,64,-4': 'lava', '1,65,-4': 'lava' }).reason, 'lava');
+    assert.equal(chooseEvidenceColumn({ x: 0, y: -80, z: 0 }, {}).reason, 'void');
+    const { parent, admitted } = tempPopulation([person('ada', 'Ada', 'Ada lives here.')]);
+    try {
+        const dir = admitted.records[0].directory;
+        const life = readLife(dir);
+        life.lifecycle = 'dead';
+        life.death = { at: NOW, position: { x: 1.4, y: 64.2, z: -3.2 }, cause: null, evidence: null };
+        writeLife(dir, life);
+        assert.throws(() => placeConfiguredRemains({
+            village_remains_container: 'village-alpha',
+            agent_data_root: dir,
+            profile: { name: 'Ada' },
+        }), /Village Alpha/);
+        const commands = [];
+        const placed = placeConfiguredRemains({
+            village_remains_container: 'village-m3-smoke',
+            agent_data_root: dir,
+            profile: { name: 'Ada' },
+        }, {
+            run(command) {
+                commands.push(command);
+                if (command.includes('minecraft:air')) return 'Test passed';
+                if (command.startsWith('execute if block')) return 'Test failed';
+                return 'Summoned new Armor Stand';
+            },
+        });
+        assert.equal(placed.status, 'placed');
+        assert.equal(commands.filter(command => command.startsWith('summon') || command.includes('summon')).length, 1);
+        const again = placeConfiguredRemains({
+            village_remains_container: 'village-m3-smoke',
+            agent_data_root: dir,
+            profile: { name: 'Ada' },
+        }, { run() { throw new Error('should not place twice'); } });
+        assert.equal(again.status, 'placed');
     } finally {
         rmSync(parent, { recursive: true, force: true });
     }

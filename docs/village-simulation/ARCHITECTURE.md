@@ -1,6 +1,6 @@
 # Village simulation architecture
 
-Spec-Version: 0.5.0
+Spec-Version: 0.5.1
 Status: Accepted design. Milestones 1, 2, and 3 are implemented. Later milestones are not.
 Date: 2026-11-15
 
@@ -248,14 +248,14 @@ Ordinary speech, including Minecraft chat, whispers, and agent-to-agent MindServ
 **Death.** Survival agents still respawn and continue. A scenario with `permanent_death: true` does not.
 
 - The life record stores time, position, dimension, the server death-translation key when it is more specific than `death.attack.generic`, and the server message. A missing or generic key is stored as `cause: null`, which means unknown. The code does not invent a cause.
-- `dead` is written before the process exits. The exit code is 0. Launch, `AgentProcess` auto-restart, and MindServer start and `forceRestart` all go through `beginProcess`, which refuses `dead`.
+- `dead` is written when the death event arrives, before the 500ms wait that allows a later message to fill an unknown cause and before the process exits. The exit code is 0. A missing cause does not undo `dead`. Launch, `AgentProcess` auto-restart, and MindServer start and `forceRestart` all go through `beginProcess`, which refuses `dead`.
 - The Mineflayer session is ended. The mind is not told to continue the objective.
 - No system observation is injected into other agents saying that this person died.
 - Another inhabitant records a death only through `recordDeathKnowledge`: `witness` and `discovery` are `observed`, and `told` names the speaker. Those writes touch only the listener's directory.
 - A crash, kick, network drop, server shutdown, or operator stop of a living inhabitant stays `absent`.
 - Offline mode identifies a Minecraft user by username. The supervisor will not start a dead life, and the placement datapack will not treat a new login as a new admission of that mind. Another client can still connect with the same offline username. That is not cryptographic identity. Human players join under their own names.
 
-**Remains.** Dropped items can despawn, and the inhabitant is not an operator, so the agent does not run `/summon`. `planRemains` records a named armor stand (`village_remains`, custom name is the Minecraft username, no cause and no coordinates on the entity) when the block at the death position is loaded and is not lava, void (`y < -64`), a chest, a barrel, a bed, a crafting table, or a furnace. Water and air are acceptable sites. An unloaded chunk is `unplaced` with reason `unloaded` rather than a guessed marker. The same plan id is not replaced by a later call. `scripts/village/place-remains.js` is the operator command that can summon the stand. It refuses the survival container and data directory, and it refuses Village Alpha unless `--allow-village-alpha` is passed. It was not run in this milestone. A nearby inhabitant records a discovery only when an entity in hearing range carries both the tag and a readable custom name. An unnamed armor stand is not evidence.
+**Remains.** Dropped items can despawn, and the inhabitant is not an operator, so the agent does not type a command. When `settings.remains_container` is set, the death shutdown calls `placeConfiguredRemains` through RCON on that container only. The container name `ai-village` or `village-alpha` is refused. The stand is an armor stand whose visible custom name is the Minecraft username. It also carries the server-only tag `village_remains`. Mineflayer does not receive scoreboard tags; discovery reads the custom name from entity metadata. Cause, time, and coordinates are not written on the stand. Air, water, and grass are acceptable sites. The feet block is used, then one block up, then the four neighboring columns. Lava, the void (`y < -64`), a chest, a barrel, a bed, a crafting table, and a furnace are not replaced. `data get block` does not name a normal block, so the site check is `execute if block`. The chunk is forceloaded only for the summon and then released. An unloaded chunk stays `unplaced` with reason `unloaded`. A later call does not summon a second stand once `evidence.status` is `placed`. `scripts/village/place-remains.js` is the manual operator command. It refuses the survival world, and it refuses Village Alpha unless `--allow-village-alpha` is passed.
 
 **Resources.** Homes, beds, food, tools, and paths are placed before any inhabitant is started, by `node scripts/village/provision.js` against the isolated village server. The village-alpha world is the plains village from seed `village-alpha`, with chests and missing fixtures added once from `site.json` and the supply manifest. Agents are not asked to bootstrap that village with `buildPlane`. After a house has been provisioned once, chests are ordinary containers. Food can be eaten. Tools can break. Restart, death, and absence do not refill them. Vacant plots are not stocked. The plot list remains the home assignment.
 

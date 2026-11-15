@@ -27,7 +27,7 @@ import { sanitizeIncomingPeerMessage, sanitizeOutgoingChat } from './chat_hygien
 import { loadVillagePlaces } from '../village/knowledge.js';
 import { buildDeathFacts, recordVerifiedDeath } from '../village/death.js';
 import { noteNearbyRemains, recordVillageAction, recordVillageSpeech } from '../village/experience.js';
-import { acceptInWorldSpeech, DEFAULT_HEARING_BLOCKS, speakerDistance } from '../village/locality.js';
+import { acceptInWorldSpeech, claimSpeech, DEFAULT_HEARING_BLOCKS, speakerDistance } from '../village/locality.js';
 
 export class Agent {
     async start(load_mem=false, init_message=null, count_id=0) {
@@ -180,13 +180,14 @@ export class Agent {
 
                 console.log(this.name, 'received message from', username, ':', message);
 
-                if (convoManager.isOtherAgent(username)) {
+                if (convoManager.isOtherAgent(username) && settings.village_autonomy !== true) {
+                    // Survival agents receive each other through MindServer.
+                    // A whisper or public copy is not a second conversation.
                     console.warn('received whisper from other bot??')
+                    return;
                 }
-                else {
-                    let translation = await handleEnglishTranslation(message);
-                    this.handleMessage(username, translation);
-                }
+                let translation = await handleEnglishTranslation(message);
+                this.handleMessage(username, translation);
             } catch (error) {
                 console.error('Error handling message:', error);
             }
@@ -199,6 +200,7 @@ export class Agent {
                 const range = settings.village_hearing_blocks || DEFAULT_HEARING_BLOCKS;
                 const distance = speakerDistance(this.bot, username);
                 if (!acceptInWorldSpeech({ village: true, distance, range })) return;
+                if (!claimSpeech(username, message)) return;
             }
             return respondFunc(username, message);
         };
@@ -207,6 +209,9 @@ export class Agent {
         
         this.bot.on('chat', (username, message) => {
             if (settings.village_autonomy === true) {
+                // Distance is applied in hearNearby. A MindServer copy of the
+                // same sentence is claimed once, so a nearby listener still
+                // hears public chat and the addressee does not hear it twice.
                 hearNearby(username, message);
                 return;
             }
@@ -355,6 +360,7 @@ export class Agent {
     }
 
     async handleMessage(source, message, max_responses=null) {
+        if (this._retirementStarted) return false;
         if (!this.ready) {
             this._deferredMessages = this._deferredMessages || [];
             this._deferredMessages.push({ source, message, max_responses });
@@ -441,7 +447,7 @@ export class Agent {
         // example inside a long peer conversation) an agent with no usable plan
         // asks for one in the background so planning does not depend on the
         // conversation ending. Shares ensurePlan's single request and backoff.
-        if (!self_prompt && !this.self_prompter.isActive()) {
+        if (!self_prompt && !this.self_prompter.isActive() && settings.village_autonomy !== true) {
             try {
                 this.plan_manager?.ensurePlanInBackground?.();
             } catch (error) {
@@ -781,17 +787,11 @@ export class Agent {
             const position = this.bot.entity?.position;
             if (position) this._deathPosition = { x: position.x, y: position.y, z: position.z };
             if (settings.village_permadeath === true) {
-                this.actions.cancelResume();
-                this.self_prompter.interrupt = true;
-                this.self_prompter.state = 0;
-                clearTimeout(this._deathTimer);
-                this._deathTimer = setTimeout(() => {
-                    this._retireVillageLife(buildDeathFacts({
-                        position: this._deathPosition,
-                        dimension: this.bot.game?.dimension,
-                        name: this.name,
-                    }));
-                }, 500);
+                this._noteVillageDeath(buildDeathFacts({
+                    position: this._deathPosition,
+                    dimension: this.bot.game?.dimension,
+                    name: this.name,
+                }));
                 return;
             }
             this.actions.cancelResume();
@@ -808,8 +808,7 @@ export class Agent {
         this.bot.on('messagestr', async (message, _, jsonMsg) => {
             if (jsonMsg.translate && jsonMsg.translate.startsWith('death') && message.startsWith(this.name)) {
                 if (settings.village_permadeath === true) {
-                    clearTimeout(this._deathTimer);
-                    this._retireVillageLife(buildDeathFacts({
+                    this._noteVillageDeath(buildDeathFacts({
                         position: this._deathPosition || this.bot.entity?.position,
                         dimension: this.bot.game?.dimension,
                         translate: jsonMsg.translate,
@@ -888,18 +887,43 @@ export class Agent {
     }
     
 
-    _retireVillageLife(facts) {
-        if (this._retiredLife) return;
-        this._retiredLife = true;
-        clearTimeout(this._deathTimer);
+    _noteVillageDeath(facts) {
+        let recorded = null;
         try {
-            if (settings.agent_data_root) recordVerifiedDeath(settings.agent_data_root, facts);
+            if (settings.agent_data_root) recorded = recordVerifiedDeath(settings.agent_data_root, facts);
         } catch (error) {
             console.error(`[${this.name}] Death was not durable: ${error.message}`);
         }
+        if (this._retirementStarted) return recorded;
+        this._retirementStarted = true;
         this.self_prompter.interrupt = true;
         this.self_prompter.state = 0;
+        this.shut_up = true;
         try { this.actions?.cancelResume?.(); } catch { /* already idle */ }
+        // The life file is already dead. This delay only lets a death message
+        // fill an unknown cause and lets the remains placer finish. It is not
+        // what makes the death terminal.
+        clearTimeout(this._deathTimer);
+        this._deathTimer = setTimeout(() => {
+            this._finishVillageDeath().catch((error) => {
+                console.error(`[${this.name}] Death shutdown failed: ${error.message}`);
+                process.exit(0);
+            });
+        }, 500);
+        return recorded;
+    }
+
+    async _finishVillageDeath() {
+        if (this._retirementFinished) return;
+        this._retirementFinished = true;
+        clearTimeout(this._deathTimer);
+        try {
+            const { placeConfiguredRemains } = await import('../village/remains.js');
+            await placeConfiguredRemains(settings);
+        } catch (error) {
+            console.error(`[${this.name}] Remains were not placed: ${error.message}`);
+        }
+        this._disconnectHandled = true;
         try { this.bot?.end?.('permanent death'); } catch { /* socket already closed */ }
         process.exit(0);
     }

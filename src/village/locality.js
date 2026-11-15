@@ -26,3 +26,38 @@ export function acceptInWorldSpeech({ village = false, distance = null, range = 
     if (distance == null || !Number.isFinite(distance)) return false;
     return distance <= range;
 }
+
+const recentSpeech = new Map();
+const SPEECH_DEDUPE_MS = 3000;
+
+/** Public mirrors prefix the same sentence. Both copies are one utterance. */
+export function comparableSpeech(message) {
+    return String(message ?? '')
+        .replace(/^\(To [^)]+\)\s*/i, '')
+        .replace(/^\(FROM OTHER BOT\)/i, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+}
+
+/**
+ * The first handler to claim an utterance within three seconds delivers it.
+ * A later MindServer copy or public chat copy of that same sentence does not.
+ */
+export function claimSpeech(speaker, message, now = Date.now()) {
+    const body = comparableSpeech(message);
+    if (!speaker || !body) return false;
+    const key = `${String(speaker).toLowerCase()}|${body}`;
+    const previous = recentSpeech.get(key);
+    recentSpeech.set(key, now);
+    if (recentSpeech.size > 200) {
+        for (const [stored, at] of recentSpeech) {
+            if (now - at > SPEECH_DEDUPE_MS) recentSpeech.delete(stored);
+        }
+    }
+    return previous == null || now - previous >= SPEECH_DEDUPE_MS;
+}
+
+export function resetSpeechClaims() {
+    recentSpeech.clear();
+}

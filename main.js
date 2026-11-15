@@ -111,7 +111,9 @@ if (args.scenario) {
     if (prepared.refused.length) {
         console.log(`Not starting deceased inhabitants: ${prepared.refused.map(record => record.profile.name).join(', ')}`);
     }
-    for (const agentSettings of prepared.agents) {
+    for (let index = 0; index < prepared.agents.length; index++) {
+        const agentSettings = prepared.agents[index];
+        if (index > 0) await new Promise(resolve => setTimeout(resolve, 4000));
         const result = await Mindcraft.createAgent(agentSettings);
         if (!result.success) {
             console.error(`Failed to create agent ${agentSettings.profile.name}: ${result.error}`);

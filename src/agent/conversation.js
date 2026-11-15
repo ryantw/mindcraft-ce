@@ -1,7 +1,7 @@
 import settings from './settings.js';
 import { containsCommand, stripUnsharedCommands } from './commands/index.js';
 import { sendBotChatToServer } from './mindserver_proxy.js';
-import { acceptInWorldSpeech, DEFAULT_HEARING_BLOCKS, speakerDistance } from '../village/locality.js';
+import { acceptInWorldSpeech, claimSpeech, DEFAULT_HEARING_BLOCKS, speakerDistance } from '../village/locality.js';
 
 let agent;
 let agent_names = [];
@@ -266,7 +266,7 @@ class ConversationManager {
         convo.active = true;
         this.activeConversation = convo;
         this._startMonitor();
-        this.sendToBot(send_to, message, true, false);
+        this.sendToBot(send_to, message, true, settings.village_autonomy === true);
         return true;
     }
 
@@ -316,6 +316,7 @@ class ConversationManager {
                 console.log(`[${agent?.name}] Did not hear ${sender}; no body is within ${range} blocks.`);
                 return;
             }
+            if (!claimSpeech(sender, received?.message)) return;
         }
         const convo = this._getConvo(sender);
 

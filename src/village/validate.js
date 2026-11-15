@@ -212,7 +212,7 @@ export function validateScenario(bundle, { reservedNames = [], knownRuntimeIds =
     }
     assertInside(directory, scenario.village, 'village path');
 
-    exactKeys(scenario.settings, ['base_profile', 'allow_insecure_coding', 'load_memory', 'permanent_death', 'hearing_blocks'], 'scenario.settings');
+    exactKeys(scenario.settings, ['base_profile', 'allow_insecure_coding', 'load_memory', 'permanent_death', 'hearing_blocks', 'remains_container'], 'scenario.settings');
     requireKeys(scenario.settings, ['base_profile', 'allow_insecure_coding'], 'scenario.settings');
     if (!BASE_PROFILES.has(scenario.settings.base_profile)) fail(`base_profile '${scenario.settings.base_profile}' is not a shared Mindcraft baseline.`);
     if (scenario.settings.allow_insecure_coding !== false) fail('Insecure village configuration: allow_insecure_coding must be false.');
@@ -225,6 +225,15 @@ export function validateScenario(bundle, { reservedNames = [], knownRuntimeIds =
     if (scenario.settings.hearing_blocks !== undefined) {
         if (!isInteger(scenario.settings.hearing_blocks) || scenario.settings.hearing_blocks < 8 || scenario.settings.hearing_blocks > 128) {
             fail('scenario.settings.hearing_blocks must be an integer from 8 to 128.');
+        }
+    }
+    if (scenario.settings.remains_container !== undefined) {
+        plainString(scenario.settings.remains_container, 'scenario.settings.remains_container');
+        if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$/.test(scenario.settings.remains_container)) {
+            fail('scenario.settings.remains_container must be a container name.');
+        }
+        if (scenario.settings.remains_container === 'ai-village' || scenario.settings.remains_container === 'village-alpha') {
+            fail('scenario.settings.remains_container cannot name the survival server or Village Alpha.');
         }
     }
 

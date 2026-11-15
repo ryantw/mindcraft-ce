@@ -1,6 +1,6 @@
 # Village simulation scenario schema
 
-Spec-Version: 0.5.0
+Spec-Version: 0.5.1
 Status: Schema version 1 is loaded by the application.
 Date: 2026-11-15
 
@@ -79,6 +79,7 @@ Rules:
 - `settings.base_profile` selects the shared gameplay defaults (`survival` unless a future village base profile is added). It does not select a personality.
 - `settings.permanent_death` is optional. `true` retires a verified death of that body. Omitted or `false` keeps the survival respawn-and-continue behavior. Village Alpha sets `true`.
 - `settings.hearing_blocks` is optional, an integer from 8 to 128. Omitted means 32. It is the radius for ordinary speech in a village session.
+- `settings.remains_container` is optional. When set, a verified death summons one named armor stand through RCON on that container. The name must not be `ai-village` or `village-alpha`. Omitted means the death record is written and no stand is summoned. The client reads the armor stand's custom name. The `village_remains` tag is server-side only.
 - No field here assigns a profession, a settlement quest, or a lifelong ambition.
 
 The scenario does not embed `settings.init_message` and must not overwrite it. The survival message stays the default for `node main.js` with no scenario. A village run has no assigned ambition. That does not stop the autonomous loop. Milestone 1 adds the scenario-level hook described in [ARCHITECTURE.md](ARCHITECTURE.md). Current intentions, when they exist, come from runtime after milestone 4. Long-term ambitions are never a scenario field.

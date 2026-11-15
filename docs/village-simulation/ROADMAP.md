@@ -1,6 +1,6 @@
 # Village simulation roadmap
 
-Spec-Version: 0.5.0
+Spec-Version: 0.5.1
 Status: Milestones 1, 2, and 3 are implemented. Later milestones are not.
 Date: 2026-11-15
 
@@ -87,9 +87,9 @@ Personality-driven play, death, dreams, refilling chests, asking agents to const
 
 ## Milestone 3 — Identity, memory, local knowledge, death
 
-Status: Implemented.
+Status: Implemented. Automated acceptance and a disposable live verification are separate. `node --test tests/*.js` is the automated suite. The live check used container `village-m3-smoke`, port `127.0.0.1:25567`, and scenario `village-m3-smoke` with temporary inhabitants Wynn, Holt, and Nia. It did not start Ione, Cass, Rufus, Nell, or Bram, and it did not write to Village Alpha or the survival world.
 
-Private minds and permanent death, still on the daytime model only. The day prompt reads `identity.json`, `knowledge.json`, `relationships.json`, and a short slice of `episodes.json` from that inhabitant's directory. Ordinary speech is audible within `settings.hearing_blocks` (32 on village-alpha) of a loaded body. A verified death writes `lifecycle: dead` before the process exits with code 0, so the supervisor does not restart it. Survival agents still respawn and continue. Physical remains are a named armor stand with the tag `village_remains`, placed only by `scripts/village/place-remains.js` after an operator confirms a safe block. The agent does not summon it, and this milestone did not place one in Village Alpha. Automated coverage is `tests/village_minds.test.js`. A disposable live server was not started.
+Private minds and permanent death, still on the daytime model only. The day prompt reads `identity.json`, `knowledge.json`, `relationships.json`, and a short slice of `episodes.json` from that inhabitant's directory. Ordinary speech is audible within `settings.hearing_blocks` (32 on village-alpha) of a loaded body. A verified death writes `lifecycle: dead` before the 500ms shutdown wait, then the process exits with code 0, so the supervisor does not restart it. Survival agents still respawn and continue. When `settings.remains_container` names the scenario's own server, that shutdown summons one named armor stand. The client sees the custom name, not the server-only `village_remains` tag. `scripts/village/place-remains.js` remains an operator command and was not run against Village Alpha. Automated coverage is `tests/village_minds.test.js`.
 
 ### Definition of done
 
