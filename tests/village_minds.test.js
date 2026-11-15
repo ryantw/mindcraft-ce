@@ -361,7 +361,7 @@ test('a prompt does not open another life, the registry, or a death record', () 
         assert.equal(context.text.includes('SECRET-DEATH-CAUSE'), false);
         assert.equal(context.text.includes('SECRET-REGISTRY'), false);
         for (const file of context.files) {
-            assert.ok(['identity.json', 'knowledge.json', 'relationships.json', 'episodes.json'].includes(file));
+            assert.ok(['identity.json', 'knowledge.json', 'relationships.json', 'episodes.json', 'morning.json', 'intentions.json'].includes(file));
         }
         assert.equal(context.files.includes('life.json'), false);
         assert.equal(context.files.includes('registry.json'), false);

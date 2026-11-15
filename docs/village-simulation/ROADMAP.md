@@ -1,10 +1,10 @@
 # Village simulation roadmap
 
-Spec-Version: 0.5.1
-Status: Milestones 1, 2, and 3 are implemented. Later milestones are not.
+Spec-Version: 0.6.0
+Status: Milestones 1, 2, 3, and 4 are implemented. Later milestones are not.
 Date: 2026-11-15
 
-Revised from 0.4.0. Milestone 3 adds private identity, episodes, relationships, local speech, and a durable death transition. Dreaming stays later. The milestone was not run against the live Village Alpha server.
+Revised from 0.5.1. Milestone 4 adds sleep-triggered dreaming, a scenario-wide dream queue, private journals, and optional personal intentions. It was live-checked on the disposable `village-m3-smoke` world, not on Village Alpha. A fixture of fifteen inhabitants sharing the queue does not say that fifteen simultaneous bodies run efficiently on this machine.
 
 Milestones are sequential. A later milestone may be designed against this document, but it is not started until the previous milestone's acceptance criteria are met. The recommended first implementation is milestone 1.
 
@@ -25,7 +25,7 @@ Implementation choices locked with this milestone:
 - Admission runs when the scenario process starts. Adding a person is a data change plus a later restart. Hot admission while a process is already up is not implemented.
 - Each inhabitant's agent files go under `runtime/scenarios/<scenario_id>/<inhabitant_id>/` through `settings.agent_data_root` on that agent's settings copy. `runtime/` is play data and is gitignored.
 - A plot edit that points an admitted life at a different house is recorded as `home_mismatch`. It does not rewrite `identity.json` and it does not refuse startup. Two plots naming the same occupant in one file is a hard error.
-- The day model is overlaid as the profile `model` and still merged by `Prompter` with `profiles/defaults/_default.json` and the scenario `base_profile`. The dream model is stored as `settings.dream_model` and no dream client is built. The admission snapshot is not inserted into the day prompt until milestone 3.
+- The day model is overlaid as the profile `model` and still merged by `Prompter` with `profiles/defaults/_default.json` and the scenario `base_profile`. Milestone 1 stores the dream model as `settings.dream_model` and does not build a dream client. Milestone 4 builds that client when a sleep job runs.
 - The autonomous loop starts from `VILLAGE_AUTONOMY_PREAMBLE` in `src/agent/startup_goal.js`. `usableGoal` ignores that text, so it is not stored as an ambition. `init_message` on the village settings copy is null.
 
 ### Definition of done
@@ -116,7 +116,23 @@ The 14B dream, journals written by the dream model, the observer dashboard, slee
 
 ## Milestone 4 — Sleep and dreaming
 
+Status: Implemented.
+
 One stronger-model consolidation pass during real sleep.
+
+Implementation choices locked with this milestone:
+
+- The dream model comes from `scenario.models.dream`. Defaults remain local Ollama `qwen3:14b` with thinking on, and `qwen3:8b` with thinking off for the day. Both stay configurable. No paid API.
+- The dream client is constructed when a job runs. It is not built at admission.
+- Sleep is Mineflayer's `bot.isSleeping` rising edge. One sleep id, one successful dream. Polling and a second sleep during `queued` or `running` do not add a row. The same inhabitant cannot enqueue again within 90 seconds.
+- The queue and the lease live on the scenario runtime root and survive process restarts. One lease serializes dream calls across inhabitant processes. The owner applies the result when idle. The body is not held asleep.
+- Day calls are not queued behind dreams. A dream may wait up to 45 seconds for a 3 second quiet window, then run. The next dream waits 20 seconds. Dream `keep_alive` is `45s`.
+- Timeout 180000 ms. Default `max_predict` 1536, hard cap 2048. Unavailable models fail with a message that starts `Dream model unavailable.`
+- Output is the JSON object in [ARCHITECTURE.md](ARCHITECTURE.md). Validation drops unsupported facts and refuses identity, life, lesson, ledger, and inventory rewrites. Commit is idempotent on sleep id.
+- The day prompt receives the morning brief, the stance, and the active intention when one exists. It does not receive the dream's episode window. An empty intention does not stop the autonomous loop. `!intention` can pursue, revise, complete, or abandon without creating a plan or a self-prompt.
+- A life with no episodes may ask the day model once for an intention. That is not a dream and writes no journal.
+- A saved self-prompt is not resumed as an assigned village goal. Personal direction lives in `intentions.json`. An unfinished `plan.json` may be shown as optional work and does not outrank that intention.
+- Village decision prompts do not include the 500-character rolling summary. Survival prompts still do. The village file is left in place and is not regenerated.
 
 ### Definition of done
 
@@ -199,4 +215,4 @@ These will be written when the milestone is specified. Any design that "simulate
 
 ## Recommended next step
 
-Milestones 1 and 2 are in place. The next milestone is 3. Do not start it until a task names it.
+Milestones 1 through 4 are in place. The next milestone is 5. Do not start it until a task names it.

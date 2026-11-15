@@ -79,6 +79,10 @@ export class SelfPrompter {
         try {
             while (this._shouldContinue()) {
                 const choosing = this.prompt === VILLAGE_AUTONOMY_PREAMBLE;
+                if (choosing) {
+                    await this.agent.applyReadyDream?.();
+                    await this.agent.orientVillage?.();
+                }
                 if (!choosing) await this.agent.plan_manager?.ensurePlan?.();
                 if (!this._shouldContinue()) break;
                 const activePlan = this.agent.plan_manager?.getCurrentPlan?.();

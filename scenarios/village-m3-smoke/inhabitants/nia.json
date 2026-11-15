@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "id": "nia",
+  "name": "Nia",
+  "profile_version": 1,
+  "backstory": [
+    { "id": "house", "text": "Nia is newer and lives in the eastern house." },
+    { "id": "manner", "text": "Nia fills a silence and does not yet know what the others think." }
+  ],
+  "temperament": ["Talks when a pause gets long.", "Treats a new person as a visitor until something happens."],
+  "interests": ["talking", "looking around"],
+  "seed_relationships": [
+    {
+      "other_id": "wynn",
+      "stance": "curious",
+      "note": "Wonders about Wynn and does not know that Wynn is wary."
+    }
+  ]
+}

@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "id": "village-m3-smoke",
+  "title": "Disposable live verification",
+  "connection": {
+    "host": "127.0.0.1",
+    "port": 25567,
+    "minecraft_version": "1.21.6",
+    "auth": "offline"
+  },
+  "models": {
+    "day": {
+      "api": "ollama",
+      "model": "qwen3:8b",
+      "params": {
+        "think": false,
+        "keep_alive": -1,
+        "options": {
+          "num_ctx": 8192,
+          "num_predict": 512
+        }
+      }
+    },
+    "dream": {
+      "api": "ollama",
+      "model": "qwen3:14b",
+      "params": {
+        "think": true,
+        "keep_alive": "45s",
+        "timeout_ms": 180000,
+        "max_predict": 1536,
+        "options": {
+          "num_ctx": 8192,
+          "num_predict": 1536
+        }
+      }
+    }
+  },
+  "inhabitants": [
+    "inhabitants/wynn.json",
+    "inhabitants/holt.json",
+    "inhabitants/nia.json"
+  ],
+  "village": "village.json",
+  "settings": {
+    "base_profile": "survival",
+    "allow_insecure_coding": false,
+    "load_memory": true,
+    "permanent_death": true,
+    "hearing_blocks": 32,
+    "remains_container": "village-m3-smoke"
+  }
+}

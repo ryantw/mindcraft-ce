@@ -15,7 +15,10 @@ export class Ollama {
     async complete(userContent, systemMessage, paramOverride = {}) {
         const params = mergeOllamaParams(this.params, paramOverride);
         const timeoutMs = positiveNumber(paramOverride.timeout_ms, 45000);
-        const cap = Math.min(HARD_MAX_PREDICT, positiveNumber(paramOverride.max_predict, HARD_MAX_PREDICT));
+        // Daytime reasoning stays at HARD_MAX_PREDICT even if a caller asks
+        // for more. A dream sets allow_long_completion and may use up to 2048.
+        const ceiling = paramOverride.allow_long_completion ? 2048 : HARD_MAX_PREDICT;
+        const cap = Math.min(ceiling, positiveNumber(paramOverride.max_predict, HARD_MAX_PREDICT));
         params.options = { ...(params.options || {}) };
         const requested = Number(params.options.num_predict);
         params.options.num_predict = Number.isFinite(requested)
@@ -194,7 +197,8 @@ const CONTROL_KEYS = new Set([
     'max_concurrent',
     'cooldown_ms',
     'max_consecutive',
-    'max_predict'
+    'max_predict',
+    'allow_long_completion',
 ]);
 
 function positiveNumber(value, fallback) {

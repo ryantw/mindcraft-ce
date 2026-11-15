@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "id": "holt",
+  "name": "Holt",
+  "profile_version": 1,
+  "backstory": [
+    { "id": "house", "text": "Holt lives in the house nearest the bell and likes the open square." },
+    { "id": "manner", "text": "Holt is easy to talk to and does not keep a grudge from a short meeting." }
+  ],
+  "temperament": ["Greets people who are actually nearby.", "Leaves a conversation that is going in circles."],
+  "interests": ["the square", "mending small things"],
+  "seed_relationships": [
+    {
+      "other_id": "wynn",
+      "stance": "acquaintance",
+      "note": "Has seen Wynn and does not claim to know them well."
+    }
+  ]
+}

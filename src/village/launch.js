@@ -7,7 +7,7 @@ export const DEFAULT_EMBEDDING = 'ollama/embeddinggemma';
 /**
  * Settings for one village process. The survival settings object is cloned and
  * never written. init_message is cleared so the settlement essay is not inherited.
- * The dream model is carried as configuration and is not used to construct a client.
+ * The dream model is carried as configuration. A client is built only when a sleep job runs.
  */
 export function buildAgentSettings(bundle, profile, survivalSettings, { runtimeRoot } = {}) {
     const settings = structuredClone(survivalSettings);

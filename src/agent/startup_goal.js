@@ -14,7 +14,7 @@ export const VILLAGE_DECISION_INTERVAL_MS = 15000;
  * A conversation or a simple activity is not a construction plan.
  */
 export function villageDecisionMessage() {
-    return 'You are choosing your own next moment. You have no assigned quest, profession, or lifelong ambition. A current intention, if you have one, is optional. You may visit or talk with someone nearby, look around, tend or decorate, make or share something, organize your things, rest, follow a personal interest, or abandon an intention. A conversation or another simple activity does not need a multistep plan. Staying still for a while is a complete choice. If you do act, use one !commandName.';
+    return 'You are choosing your own next moment. You have no assigned quest, profession, or lifelong ambition. A current intention, if you have one, is optional. You may visit or talk with someone nearby, look around, tend or decorate, make or share something, organize your things, rest, follow a personal interest, or abandon an intention. Speak with ordinary words. There is no !say or !talkTo command, and command syntax is not conversation. A conversation or another simple activity does not need a multistep plan. Staying still for a while is a complete choice. If you do act, use one !commandName.';
 }
 
 /** Ordinary social and domestic choices are not construction plans. */
@@ -34,9 +34,11 @@ export function usableGoal(prompt) {
  * they have no personal goal stored. Survival startup does not call this.
  */
 export function resolveVillageAutonomy({ saved, villageAutonomy = false } = {}) {
+    if (villageAutonomy) {
+        return { mode: 'autonomous', goal: null, preamble: VILLAGE_AUTONOMY_PREAMBLE, ignoredSavedGoal: usableGoal(saved) };
+    }
     const savedGoal = usableGoal(saved);
     if (savedGoal) return { mode: 'saved-goal', goal: savedGoal, preamble: null };
-    if (villageAutonomy) return { mode: 'autonomous', goal: null, preamble: VILLAGE_AUTONOMY_PREAMBLE };
     return { mode: 'none', goal: null, preamble: null };
 }
 

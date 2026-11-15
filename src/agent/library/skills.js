@@ -1941,6 +1941,10 @@ export async function goToBed(bot) {
     const bed = bot.blockAt(loc);
     await bot.sleep(bed);
     log(bot, `You are in bed.`);
+    // `bot.sleep` resolves only after the sleep event. The wait below is the
+    // body staying in bed until the server wakes it. It must not wait for a
+    // dream, and it must not enqueue one on each poll. The NBT Sleeping byte
+    // is not a signal: on 1.21 it stays 0 while SleepTimer is running.
     bot.modes.pause('unstuck');
     while (bot.isSleeping) {
         await new Promise(resolve => setTimeout(resolve, 500));

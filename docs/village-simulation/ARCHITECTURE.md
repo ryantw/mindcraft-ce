@@ -1,6 +1,6 @@
 # Village simulation architecture
 
-Spec-Version: 0.5.1
+Spec-Version: 0.6.0
 Status: Accepted design. Milestones 1, 2, and 3 are implemented. Later milestones are not.
 Date: 2026-11-15
 
@@ -46,7 +46,7 @@ Proposed. New village code should call these, not reimplement them:
 - Chat attribution and the private reflection step.
 - Profile loading and one-process-per-inhabitant.
 
-The 500-character summary remains the survival experiment's memory. For a village scenario it is not the long-term bank. Do not "fix" survival memory by making the village bank the global `History.memory` for every profile.
+The 500-character summary remains the survival experiment's memory. A village session does not regenerate it and does not place that string in the decision, planning, reflection, or conversation prompt. The existing string stays in `memory.json`. Recent turns stay in the conversation window. The morning brief, intention, and episodes are the village continuity. Do not "fix" survival memory by making the village bank the global `History.memory` for every profile.
 
 ## Two layers of data
 
@@ -140,7 +140,7 @@ That hook is in place. A village inhabitant with no intention and no ambition st
 
 ## Cognitive architecture
 
-Proposed. Same agent, two model roles, several stores. The day model is the profile's chat model. The dream model is a separate configurable client used only from the sleep path.
+Implemented. Same agent, two model roles, several stores. The day model is the profile's chat model. The dream model is a separate configurable client used only when a sleep job runs. It is the same person reflecting, not a second inhabitant or a supervisor.
 
 ```
 Day (qwen3:8b, configurable)
@@ -177,7 +177,7 @@ The dream input cap is about sixty short episodic lines plus the compact bank. T
 | Craft ledger | Runtime. One row per item, code-updated from verified outcomes. | Yes. About 15–25 lines. | No. |
 | Verified lessons | Existing `verified_lessons.json`. | Yes, through the existing known-facts block. | No. |
 | Live game state | Queried each turn. | Yes. Authoritative over every memory. | No. |
-| Conversation window and 500-character summary | Existing `memory.json` and `histories/`. | The turn window, yes. The summary is not the village long-term bank. | No. |
+| Conversation window and 500-character summary | Existing `memory.json` and `histories/`. | The turn window, yes. The summary string is kept on disk and is not inserted into a village prompt. Survival prompts still receive it. | No. |
 | Journal | Runtime. Append-only private prose. | No, except a short "yesterday" extract if the brief includes it. | May append one entry per dream. |
 | Intentions | Runtime. Hints, not a new lifelong goal. | The active one, yes. | May propose. The existing planner still has to accept a feasible plan. |
 
@@ -202,21 +202,21 @@ Open. Whether that retrieval should reuse the existing embedding example selecto
 
 ### Sleep and the dream queue
 
-Proposed for milestone 4. The trigger rule is agreed now so later work does not block on it.
+Implemented. Successful sleep is the only default trigger. `goToBed` waits on Mineflayer's `sleep` event, which sets `bot.isSleeping`. The 1.21 player NBT field `Sleeping` stays 0 during real sleep; the queue does not read it, and a model claiming it slept does not enqueue a dream. Sunrise, a missed night, or lying down without the server accepting the bed does not enqueue one.
 
-Successful sleep is the only default trigger. `goToBed` reaching `bot.isSleeping` records that a real sleep started. No sleep means no dream. Sunrise, a missed night, or lying down without the server accepting the bed does not enqueue one.
+The model call does not keep the body asleep. Waking is normal. The job still completes, and the result is applied at the next decision boundary when that inhabitant is not inside an action. A late result does not replace an intention the inhabitant already changed while awake.
 
-The model call must not depend on the body staying asleep until inference returns. Waking, walking away, or a short sleep ending is normal. The job still completes.
+`runtime/scenarios/<scenario_id>/dream_queue.json` is the durable queue. `dream_lease.json` is the turn token. Each inhabitant is a separate Node process, so an in-process lock is not the scheduler.
 
-`runtime/scenarios/<scenario_id>/dream_queue.json` is the durable queue for that scenario:
+- One row per accepted sleep: inhabitant id, sleep id, status (`queued`, `running`, `applied`, `rejected`), profile checksum, and enqueue time.
+- The same sleep id is ignored. A second sleep while a job is `queued` or `running` does not add another row. A new sleep within 90 seconds of that inhabitant's previous enqueue is also refused, so a rapid sleep/wake loop cannot grow the queue without bound.
+- Jobs are FIFO. Any living process may hold the lease and call the dream model for the head job, including another inhabitant's. Only the owner applies the result, and only while alive and while the checksum still matches. A dead life is not enqueued, and a pending job is rejected instead of applied. A failed validation or a failed model call leaves the previous journal, bank, brief, and intention.
+- The lease lasts long enough for one dream. A dead holder pid does not keep the lease until that timer ends. Commit is keyed by sleep id, so a retry or a crash during the write does not append a second journal entry.
+- Day-model calls are never queued behind a dream. A dream waits up to 45 seconds for 3 seconds without a day call, then starts anyway. After a dream, the next one waits 20 seconds so the day model can return to memory. The dream model's `keep_alive` is short (`45s` on the current scenarios) so it unloads. The day model stays loaded (`keep_alive` -1). This does not stop the two models from sharing the GPU during a dream; it stops them from evicting each other on every turn and from blocking survival on the queue.
+- Timeout is 180 seconds. Output budget defaults to 1536 tokens and is capped at 2048. One retry. If `qwen3:14b` is missing, the error starts with `Dream model unavailable.` Thinking is on for a qwen3 dream model unless the scenario sets `think` false. The day model stays `think` false.
+- Dream output is one JSON object: `journal`, `memories`, `relationships`, `stance`, `intentions` (zero to three), and `brief` (at most ten lines). Facts must paraphrase cited episodes. Feelings are interpretations. Extra keys are ignored. The dream cannot rewrite identity, life, lessons, the craft ledger, inventory, or another inhabitant's files.
 
-- One row per sleep that was accepted: inhabitant id, sleep id, status (`queued`, `running`, `applied`, `rejected`), and the snapshot checksum the job was built from.
-- Deduplicate on inhabitant id plus an unfinished status. A second sleep while a job is `queued` or `running` does not add another row.
-- Workers are serialized across the scenario, in the same spirit as reflection's `max_concurrent`.
-- Apply the result only if the row is still `running`, the checksum still matches the admission snapshot, and lifecycle is `alive` or `absent`. Do not apply onto `dead`. Do not apply twice. A failed validation leaves the previous morning brief and marks the row `rejected`.
-- The inhabitant may be `awake` while the row is `running`. Applying a result does not require them to be in bed.
-
-The dream reads only that mind's snapshot, bank, episodes (capped, on the order of sixty), ledger, plan outcome, and relationships. It is prompted in the first person. Output is structured. Code drops command syntax, inventory claims, and any death or relationship event with no episode id. Intentions are optional hints to the existing planner. They are not a new `self_prompt` essay and they are not required for the autonomous loop.
+The dream reads only that mind's snapshot, bank, episodes (capped at about sixty, cut off when inference starts), ledger, plan outcome, and relationships. Events after the cutoff stay unconsolidated. It is prompted in the first person. Intentions are optional. They are not a new `self_prompt` essay and they are not required for the autonomous loop. A first day with no episodes can choose an intention from the day model once. That orientation does not invent a journal. Actual dreaming still requires actual sleep.
 
 If the dream model errors, yesterday's brief remains and the inhabitant keeps acting. Sleep deprivation, if it is ever built, may shrink retrieval. It must not rewrite the snapshot, episodes, lessons, ledger, or queue history into garbage. It is milestone 7, not part of the queue.
 
@@ -279,12 +279,11 @@ Agreed, and already true of the gameplay stack:
 
 Collected here so implementation does not pretend they are settled.
 
-Decided, and no longer open: runtime root `runtime/scenarios/<scenario_id>/` via `agent_data_root`; CLI `--scenario`; explicit TCP ports; survival names are rejected; plots own home assignment; a later house edit is `home_mismatch` rather than a refused start; admission snapshot plus checksum; restart-based admission; dead is terminal across every start path; crash, disconnect, and operator stop are `absent`; no sleep means no dream; the dream model is configuration only until milestone 4; the day-model overlay reuses the prompter merge; the admission snapshot is the day-prompt identity; no assigned ambition still runs the autonomous loop through `VILLAGE_AUTONOMY_PREAMBLE`, with a 15 second pause when the inhabitant chooses not to act; ordinary speech uses a 32-block default radius; a verified death exits the process after `life.json` is durable; physical evidence is an operator-placed named armor stand, not an emptied house; milestone 2 places blocks by furnishing the seed village once through `scripts/village/provision.js`.
+Decided, and no longer open: runtime root `runtime/scenarios/<scenario_id>/` via `agent_data_root`; CLI `--scenario`; explicit TCP ports; survival names are rejected; plots own home assignment; a later house edit is `home_mismatch` rather than a refused start; admission snapshot plus checksum; restart-based admission; dead is terminal across every start path; crash, disconnect, and operator stop are `absent`; no sleep means no dream; the dream client is built when a sleep job runs, not at admission; dream output is the JSON object in the sleep section, with a 180 second timeout and the error prefix `Dream model unavailable.`; a failed dream keeps yesterday's brief; the day-model overlay reuses the prompter merge; the admission snapshot is the day-prompt identity; no assigned ambition still runs the autonomous loop through `VILLAGE_AUTONOMY_PREAMBLE`, with a 15 second pause when the inhabitant chooses not to act; ordinary speech uses a 32-block default radius; a verified death exits the process after `life.json` is durable; physical evidence is an operator-placed named armor stand, not an emptied house; milestone 2 places blocks by furnishing the seed village once through `scripts/village/provision.js`.
 
 Still open.
 
-1. Dream output JSON in detail, the timeout, and the exact error string when `qwen3:14b` is missing. The queue, deduplication, checksum check, and "keep yesterday's brief" rule are decided. Milestone 4.
-2. Semantic retrieval of old episodes. Milestone 3 selects pinned episodes and a small recent or name-matched slice. It does not embed or search the archive.
-3. Whether temperament later gains a small code-owned preference record. Milestone 7. Until then, prose facts and a stance line.
-4. Whether any container is designated public. Private chests are ordinary containers the owner can open; taking from one needs no special theft system if the game already allows the open. Which containers are private is the plot's chest, decided. Extra shared chests are optional scenario content.
-5. Dashboard inside MindServer versus a read-only addition. Preference: extend MindServer. Milestone 5.
+1. Semantic retrieval of old episodes. Milestone 3 selects pinned episodes and a small recent or name-matched slice. Milestone 4's dream reads the newest sixty plus pinned rows. It does not embed or search the archive.
+2. Whether temperament later gains a small code-owned preference record. Milestone 7. Until then, prose facts and a stance line.
+3. Whether any container is designated public. Private chests are ordinary containers the owner can open; taking from one needs no special theft system if the game already allows the open. Which containers are private is the plot's chest, decided. Extra shared chests are optional scenario content.
+4. Dashboard inside MindServer versus a read-only addition. Preference: extend MindServer. Milestone 5.

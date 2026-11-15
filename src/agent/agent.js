@@ -19,7 +19,7 @@ import { speak } from './speak.js';
 import { log, validateNameFormat, handleDisconnection } from './connection_handler.js';
 import { resolveStartupGoal, resolveVillageAutonomy, usableGoal, VILLAGE_AUTONOMY_PREAMBLE } from './startup_goal.js';
 import { PlanManager } from './plan_manager.js';
-import { blockingRepeatCount, isCommandRejection, updateRepeatCounts } from './action_outcome.js';
+import { blockingRepeatCount, isCommandRejection, resourceAttemptKey, updateRepeatCounts } from './action_outcome.js';
 import { maybeAutoReflect, recordCommandResult } from './reflection_triggers.js';
 import { reflectionState } from './reasoning.js';
 import { resumePausedAutonomy, systemObservation } from './system_events.js';
@@ -28,6 +28,8 @@ import { loadVillagePlaces } from '../village/knowledge.js';
 import { buildDeathFacts, recordVerifiedDeath } from '../village/death.js';
 import { noteNearbyRemains, recordVillageAction, recordVillageSpeech } from '../village/experience.js';
 import { acceptInWorldSpeech, claimSpeech, DEFAULT_HEARING_BLOCKS, speakerDistance } from '../village/locality.js';
+import { attachVillageMind, cancelDreamsForDeath } from '../village/dream_service.js';
+import { villageSpokenWords } from './chat_hygiene.js';
 
 export class Agent {
     async start(load_mem=false, init_message=null, count_id=0) {
@@ -242,14 +244,17 @@ export class Agent {
             saved: save_data?.self_prompt,
             villageAutonomy: settings.village_autonomy === true,
         });
-        if (savedGoal) {
-            const resumablePause = save_data.self_prompting_state === 2
-                && !(save_data.last_sender && convoManager.otherAgentInGame(save_data.last_sender));
-            await this.self_prompter.handleLoad(savedGoal, save_data.self_prompting_state, { resumePaused: resumablePause });
-        } else if (villageStart.mode === 'autonomous') {
+        if (villageStart.mode === 'autonomous') {
+            if (savedGoal) {
+                console.log(`[${this.name}] A saved self-prompt stays out of the decision loop. A personal intention is optional.`);
+            }
             const alreadyAnnounced = String(save_data?.self_prompt ?? '').trim() === VILLAGE_AUTONOMY_PREAMBLE;
             if (!alreadyAnnounced) this.history.add('system', VILLAGE_AUTONOMY_PREAMBLE);
             this.self_prompter.start(VILLAGE_AUTONOMY_PREAMBLE);
+        } else if (savedGoal) {
+            const resumablePause = save_data.self_prompting_state === 2
+                && !(save_data.last_sender && convoManager.otherAgentInGame(save_data.last_sender));
+            await this.self_prompter.handleLoad(savedGoal, save_data.self_prompting_state, { resumePaused: resumablePause });
         } else if (startup.goal) {
             if (startup.replacedSavedGoal || startup.notice) {
                 console.log(`[${this.name}] Restored the autonomous goal. A restart notice is not a goal.`);
@@ -542,7 +547,11 @@ export class Agent {
 
                 this.self_prompter.handleUserPromptedCmd(self_prompt, isAction(command_name));
 
-                if (settings.show_command_syntax === "full") {
+                if (settings.village_autonomy === true) {
+                    const spoken = villageSpokenWords(res, command_name);
+                    if (spoken) this.routeResponse(source, spoken);
+                }
+                else if (settings.show_command_syntax === "full") {
                     const spoken = this._speakable(res);
                     if (spoken) this.routeResponse(source, spoken);
                 }
@@ -591,10 +600,12 @@ export class Agent {
                 // Reflections never reset other counts. Verified relevant progress
                 // alone clears a structured command's count; incidental inventory
                 // gains do not. See updateRepeatCounts.
-                const behaviorKey = structuredOutcome?.behaviorKey || blockedAttempt?.behaviorKey || (!attempt.parsedOk ? attempt.behaviorHint : null);
+                const typeKey = resourceAttemptKey(attempt.action, attempt.params);
+                const behaviorKey = structuredOutcome?.behaviorKey || blockedAttempt?.behaviorKey || (failed ? typeKey : null) || (!attempt.parsedOk ? attempt.behaviorHint : null);
                 updateRepeatCounts(watchdog.counts, commandKey, {
                     structuredOutcome, failed, isSearch, isThink, thought, behaviorKey,
                 });
+                if (!failed && typeKey) watchdog.counts.delete(typeKey);
 
                 if (structuredOutcome?.retry?.reasonableWithoutStateChange === false) {
                     await this.history.add(
@@ -861,6 +872,7 @@ export class Agent {
         }, INTERVAL);
 
         this.bot.emit('idle');
+        attachVillageMind(this);
     }
 
     async update(delta) {
@@ -894,6 +906,8 @@ export class Agent {
         } catch (error) {
             console.error(`[${this.name}] Death was not durable: ${error.message}`);
         }
+        try { cancelDreamsForDeath(settings.agent_data_root, settings.village_inhabitant_id); } catch { /* queue may be absent */ }
+        if (this._dreamTimer) clearInterval(this._dreamTimer);
         if (this._retirementStarted) return recorded;
         this._retirementStarted = true;
         this.self_prompter.interrupt = true;

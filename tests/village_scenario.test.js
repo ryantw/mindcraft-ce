@@ -406,8 +406,9 @@ test('village autonomy does not inherit the survival settlement goal or stop wit
     assert.equal(village.preamble, VILLAGE_AUTONOMY_PREAMBLE);
     assert.doesNotMatch(village.preamble, /settlement/i);
     const resumed = resolveVillageAutonomy({ saved: 'Visit Nell tomorrow.', villageAutonomy: true });
-    assert.equal(resumed.mode, 'saved-goal');
-    assert.equal(resumed.goal, 'Visit Nell tomorrow.');
+    assert.equal(resumed.mode, 'autonomous');
+    assert.equal(resumed.goal, null);
+    assert.equal(resumed.ignoredSavedGoal, 'Visit Nell tomorrow.');
 });
 
 test('village persistence files are written under the scenario runtime, not bots/', () => {

@@ -1,13 +1,14 @@
-import { existsSync, readFileSync } from 'fs';
-import path from 'path';
 import { readEpisodes, selectEpisodes } from './episodes.js';
 import { readKnowledge, suppliesGuidance } from './knowledge.js';
 import { readRelationships } from './relationships.js';
+import { readIntentions, activeIntentionText } from './intentions.js';
 import { VILLAGE_AUTONOMY_PREAMBLE } from '../agent/startup_goal.js';
+import { existsSync, readFileSync } from 'fs';
+import path from 'path';
 
 export const SHARED_GAMEPLAY_LINE = 'Shared actions, commands, and survival rules are the same for every inhabitant. Identity changes what you choose and what you say. It does not add a job, a script, or a different command set.';
 
-const CONTEXT_FILES = ['identity.json', 'knowledge.json', 'relationships.json', 'episodes.json'];
+const CONTEXT_FILES = ['identity.json', 'knowledge.json', 'relationships.json', 'episodes.json', 'morning.json', 'intentions.json'];
 
 function readJson(file) {
     return JSON.parse(readFileSync(file, 'utf8'));
@@ -54,13 +55,30 @@ export function renderVillageContext(dataRoot, { intention = '', liveChest = und
     ];
     const interests = clip(identity.interests, 160);
     if (interests) lines.push(`Interests, as preferences rather than duties: ${interests}`);
-    const current = String(intention || '').trim();
+    const personalStore = existsSync(path.join(dataRoot, 'intentions.json'))
+        ? (files.push('intentions.json'), readIntentions(dataRoot))
+        : null;
+    const personal = activeIntentionText(personalStore);
+    const current = personal || String(intention || '').trim();
     if (current && current !== VILLAGE_AUTONOMY_PREAMBLE) {
         lines.push(`Current intention: ${clip(current, 180)}`);
+        if (personal) lines.push('That intention is optional. You may pursue it, revise it, finish it, or leave it.');
+    }
+    const morningFile = path.join(dataRoot, 'morning.json');
+    if (existsSync(morningFile)) {
+        files.push('morning.json');
+        const morning = readJson(morningFile);
+        if (morning?.stance) lines.push(`Personal stance: ${clip(morning.stance, 240)}`);
+        if (morning?.brief) {
+            const brief = String(morning.brief).split('\n').map(line => line.trim()).filter(Boolean).slice(0, 10).join('\n');
+            const shown = brief.length <= 700 ? brief : `${brief.slice(0, 699)}…`;
+            lines.push(`This morning you remember:\n${shown}`);
+        }
     }
     if (knowledge?.home) {
         const home = knowledge.home;
         lines.push(`Your home stands at ${coord(home.home_marker)}. Bed ${coord(home.bed)}. Chest ${coord(home.chest)}. Entrance ${coord(home.door)}. Crafting table ${coord(home.crafting_table)}. Furnace ${coord(home.furnace)}.`);
+        lines.push('The crafting table and furnace at home are already there. Do not gather materials to craft or place another unless you have seen that the one at home is gone.');
         lines.push(suppliesGuidance(knowledge, episodes.episodes, liveChest));
     }
     const publicPlaces = (knowledge?.public_places || [])

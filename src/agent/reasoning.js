@@ -2,6 +2,7 @@ import settings from './settings.js';
 import { adviceCorrections, inventoryCounts, verifiedMechanicsDetail } from './mechanics.js';
 import { formatLessons, relevantLessons } from './lessons.js';
 import { inventorySnapshot, storageAcceptsItem } from './action_outcome.js';
+import { watchDayModel } from '../village/day_pulse.js';
 
 const DEFAULTS = {
     think: false,
@@ -227,8 +228,12 @@ export function situationReport(agent, question, trigger = null) {
     const bot = agent.bot;
     const state = reflectionState(agent);
     const lines = [`Agent: ${agent.name || 'unknown'}`];
-    const goal = agent.self_prompter?.prompt || 'No selected goal is recorded.';
-    lines.push(`Current objective: ${clip(goal, 400)}`);
+    const goal = agent.self_prompter?.prompt || '';
+    if (settings.village_autonomy === true) {
+        lines.push('Current objective: none assigned. A personal intention, when the private context names one, is optional.');
+    } else {
+        lines.push(`Current objective: ${clip(goal || 'No selected goal is recorded.', 400)}`);
+    }
     if (trigger) {
         lines.push(`Why this reflection was triggered: ${trigger.reason}${trigger.count ? ` (${trigger.countText || `${trigger.count} consecutive attempts without relevant progress`})` : ''}.`);
     }
@@ -292,7 +297,11 @@ export function situationReport(agent, question, trigger = null) {
 
     lines.push('');
     lines.push('Context (not verified):');
-    lines.push(`Personal memory: ${clip(agent.history?.memory || '', 300) || 'none'}`);
+    if (settings.village_autonomy === true) {
+        lines.push('Personal memory: use the morning brief, current intention, and recent episodes. The old rolling summary is not an objective.');
+    } else {
+        lines.push(`Personal memory: ${clip(agent.history?.memory || '', 300) || 'none'}`);
+    }
     lines.push('Recent actions and results:');
     lines.push(recentTurns(agent));
     lines.push('');
@@ -397,6 +406,7 @@ export async function reflect(agent, question, { source = 'voluntary', trigger =
         return { advice, corrections };
     };
     try {
+        watchDayModel(true);
         const { text: user, detail } = situationReport(agent, promptQuestion, trigger);
         let result = await model.complete(user, SYSTEM_PROMPT, requestParams(cfg, cfg.think === true));
         count(result);
@@ -435,6 +445,7 @@ export async function reflect(agent, question, { source = 'voluntary', trigger =
         console.log(`[${name}] Reflection completed: ${Date.now() - started}ms, ${evalTokens} tokens. Request failed. ${sourceLabel}`);
         return 'Reflection could not be completed. Continue with a different action.';
     } finally {
+        watchDayModel(false);
         state.busy = false;
         inFlight--;
     }

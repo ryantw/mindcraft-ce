@@ -1,0 +1,325 @@
+{
+  "schema_version": 1,
+  "id": "village-m3-smoke-places",
+  "spawn_dimension": "overworld",
+  "notes": "Disposable copy of the furnished Village Alpha world for live verification. Plot order preserves the original chest personal-item cycle. This file does not name the five Village Alpha inhabitants. Do not run provision.js against this world.",
+  "plots": [
+    {
+      "id": "plot-wynn",
+      "occupant": "wynn",
+      "home_marker": [
+        -496,
+        73,
+        -760
+      ],
+      "bed": [
+        -497,
+        73,
+        -761
+      ],
+      "chest": [
+        -495,
+        73,
+        -761
+      ],
+      "door": [
+        -496,
+        73,
+        -759
+      ],
+      "crafting_table": [
+        -497,
+        73,
+        -760
+      ],
+      "furnace": [
+        -495,
+        73,
+        -760
+      ]
+    },
+    {
+      "id": "plot-holt",
+      "occupant": "holt",
+      "home_marker": [
+        -470,
+        85,
+        -727
+      ],
+      "bed": [
+        -469,
+        85,
+        -728
+      ],
+      "chest": [
+        -469,
+        85,
+        -726
+      ],
+      "door": [
+        -471,
+        85,
+        -727
+      ],
+      "crafting_table": [
+        -468,
+        85,
+        -727
+      ],
+      "furnace": [
+        -468,
+        85,
+        -726
+      ]
+    },
+    {
+      "id": "plot-hold",
+      "occupant": null,
+      "home_marker": [
+        -427,
+        69,
+        -711
+      ],
+      "bed": [
+        -426,
+        69,
+        -710
+      ],
+      "chest": [
+        -426,
+        69,
+        -711
+      ],
+      "door": [
+        -427,
+        69,
+        -712
+      ],
+      "crafting_table": [
+        -428,
+        69,
+        -709
+      ],
+      "furnace": [
+        -428,
+        69,
+        -711
+      ]
+    },
+    {
+      "id": "plot-hold-2",
+      "occupant": null,
+      "home_marker": [
+        -418,
+        73,
+        -732
+      ],
+      "bed": [
+        -419,
+        73,
+        -733
+      ],
+      "chest": [
+        -417,
+        73,
+        -733
+      ],
+      "door": [
+        -418,
+        73,
+        -731
+      ],
+      "crafting_table": [
+        -419,
+        73,
+        -732
+      ],
+      "furnace": [
+        -417,
+        73,
+        -732
+      ]
+    },
+    {
+      "id": "plot-nia",
+      "occupant": "nia",
+      "home_marker": [
+        -400,
+        67,
+        -711
+      ],
+      "bed": [
+        -398,
+        67,
+        -710
+      ],
+      "chest": [
+        -401,
+        67,
+        -709
+      ],
+      "door": [
+        -400,
+        67,
+        -712
+      ],
+      "crafting_table": [
+        -398,
+        67,
+        -709
+      ],
+      "furnace": [
+        -401,
+        67,
+        -710
+      ]
+    }
+  ],
+  "public": [
+    {
+      "id": "square",
+      "marker": [
+        -460,
+        72,
+        -715
+      ],
+      "notes": "Bell meeting point. The bell block is two steps east of this standing spot."
+    },
+    {
+      "id": "common-house",
+      "marker": [
+        -406,
+        73,
+        -732
+      ],
+      "chest": [
+        -407,
+        73,
+        -734
+      ],
+      "notes": "The generated smithy beside the fields. Shared chest is finite and is not refilled."
+    }
+  ],
+  "provisions": {
+    "per_home": {
+      "food": [
+        {
+          "item": "bread",
+          "count": 24
+        },
+        {
+          "item": "cooked_beef",
+          "count": 16
+        },
+        {
+          "item": "apple",
+          "count": 8
+        }
+      ],
+      "tools": [
+        "stone_pickaxe",
+        "stone_axe",
+        "stone_shovel",
+        "stone_sword"
+      ],
+      "armor": [
+        "leather_helmet",
+        "leather_chestplate",
+        "leather_leggings",
+        "leather_boots"
+      ],
+      "materials": [
+        {
+          "item": "oak_log",
+          "count": 32
+        },
+        {
+          "item": "cobblestone",
+          "count": 32
+        },
+        {
+          "item": "torch",
+          "count": 16
+        },
+        {
+          "item": "wheat_seeds",
+          "count": 16
+        },
+        {
+          "item": "oak_sapling",
+          "count": 4
+        }
+      ],
+      "personal_cycle": [
+        "clock",
+        "fishing_rod",
+        "shears",
+        "flower_pot",
+        "book"
+      ],
+      "also": [
+        "crafting_table",
+        "furnace",
+        "white_bed",
+        "chest",
+        "lantern"
+      ],
+      "vacant_chest": []
+    },
+    "public_chest": [
+      {
+        "item": "wheat_seeds",
+        "count": 16
+      },
+      {
+        "item": "carrot",
+        "count": 8
+      },
+      {
+        "item": "potato",
+        "count": 8
+      },
+      {
+        "item": "bone_meal",
+        "count": 8
+      },
+      {
+        "item": "bread",
+        "count": 8
+      }
+    ],
+    "refill": "never"
+  },
+  "paths": [
+    {
+      "from": "plot-wynn",
+      "to": "square",
+      "walkable_without_breaking": true
+    },
+    {
+      "from": "plot-holt",
+      "to": "square",
+      "walkable_without_breaking": true
+    },
+    {
+      "from": "plot-hold",
+      "to": "square",
+      "walkable_without_breaking": true
+    },
+    {
+      "from": "plot-hold-2",
+      "to": "square",
+      "walkable_without_breaking": true
+    },
+    {
+      "from": "plot-nia",
+      "to": "square",
+      "walkable_without_breaking": true
+    },
+    {
+      "from": "square",
+      "to": "common-house",
+      "walkable_without_breaking": true
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "id": "wynn",
+  "name": "Wynn",
+  "profile_version": 1,
+  "backstory": [
+    { "id": "house", "text": "Wynn keeps the north-west house and treats the chest there as private." },
+    { "id": "manner", "text": "Wynn speaks briefly and would rather look at a doorway than fill a silence." }
+  ],
+  "temperament": ["Speaks briefly.", "Notices when objects in the house move."],
+  "interests": ["doorways", "quiet mornings"],
+  "seed_relationships": [
+    {
+      "other_id": "nia",
+      "stance": "wary",
+      "note": "Finds Nia loud. Nia may not know this."
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 # Village simulation scenario schema
 
-Spec-Version: 0.5.1
+Spec-Version: 0.6.0
 Status: Schema version 1 is loaded by the application.
 Date: 2026-11-15
 
@@ -145,7 +145,7 @@ The checksum covers the profile as admitted. It does not cover `village.json`, s
 
 Profiles still need a Mindcraft model block so the existing loader can run them. Proposed: the scenario runner writes or overlays the day model from `scenario.models.day` at start, and the committed inhabitant file does not fork prompts. If an inhabitant file also contains a `model` object, it overrides the scenario day model for that person only. The dream model is never taken from the inhabitant file; dreaming is a scenario-level role so the population shares one dream configuration unless the scenario itself is changed.
 
-Implemented. The scenario runner builds a profile `{name, model, embedding}` from the inhabitant and `scenario.models.day`. `Prompter` still merges `profiles/defaults/_default.json`, then `base_profile`, then that profile. Gameplay prompt text stays shared. The admission snapshot is written to `identity.json` and is not copied into the day prompt until milestone 3. The dream model is `settings.dream_model` on the agent settings copy. No dream client is constructed.
+Implemented. The scenario runner builds a profile `{name, model, embedding}` from the inhabitant and `scenario.models.day`. `Prompter` still merges `profiles/defaults/_default.json`, then `base_profile`, then that profile. Gameplay prompt text stays shared. The admission snapshot is written to `identity.json` and is what the day prompt reads. The dream model is `settings.dream_model` on the agent settings copy. The dream client is constructed only when that process claims a sleep job. It is not constructed at admission.
 
 ## Village file
 
@@ -225,12 +225,13 @@ Created on admission. Never copied from another inhabitant.
 | `episodes.json` | Append-only list of `{id, at, kind, source, text, refs, pinned}`. Kinds are `action`, `conversation`, `observed`, `told`. Sources are `verified`, `observed`, `told`, `interpretation`. The dream input is the most recent ~60 unpinned episodes plus any pinned. Rows are not deleted to meet that cap. | Code, from verified outcomes and accepted local perceptions. `!stance` may add an `interpretation` row. |
 | `long_term.json` | Up to ~40 `{id, text, priority, source_episode_ids}`. | Dream output after validation. Code may drop low-priority stale rows. |
 | `relationships.json` | Map of other ids to `{stance, note, updated_at, source_episode_ids, other_kind, opinion_episode_id}`. `other_kind` is `inhabitant` or `human` when a stance is recorded during play. Seeds omit it. | Seed copied once at admission. Later stance updates require an episode in this directory that names the person. A profile edit does not copy the seed again. |
-| `journal.json` | Append-only `{at, text}` entries. | Dream validation, one entry per successful dream. |
-| `morning.json` | `{brief, stance, intentions[]}`. Brief about ten lines. Intentions are one sentence each, maximum three. | Dream validation. Replaces the previous brief only on success. |
+| `journal.json` | Append-only `{id, at, text, sleep_id, episode_ids}` entries. | Dream commit, one entry per successful sleep id. A retry of the same sleep does not append another. |
+| `morning.json` | `{brief, stance, intentions[], sleep_id, at}`. Brief at most ten lines and 800 characters. Intentions are one sentence each, maximum three, and may be empty. | Dream commit. Replaces the previous brief only on success. |
+| `intentions.json` | Active personal intention, `waking_decision_at`, and a short history. | `!intention` while awake, or a dream commit when the inhabitant has not already chosen something newer. |
 | `craft_ledger.json` | One row per item: `{item, made, recipe, last_outcome}`. | Code from structured craft outcomes. |
 | Existing Mindcraft files | `memory.json`, `histories/`, `plan.json`, `verified_lessons.json`, `last_profile.json`. | Existing agents. Stored here, not in `bots/<name>/`, when the scenario supervisor launches them. |
 
-`dream_queue.json` lives on the scenario runtime root, not inside one life. Schema version 1 rows are `{inhabitant_id, sleep_id, status, profile_checksum, enqueued_at}`. `status` is `queued`, `running`, `applied`, or `rejected`. Milestone 1 does not run the queue. The file may be absent until milestone 4.
+`dream_queue.json` lives on the scenario runtime root, not inside one life. Schema version 1 rows are `{inhabitant_id, sleep_id, status, profile_checksum, enqueued_at}` plus `started_at`, `finished_at`, `error`, and `ready`. `status` is `queued`, `running`, `applied`, or `rejected`. `dream_lease.json` is the cross-process turn. A prepared commit for one sleep lives under that inhabitant's `dream_commits/`, and the model result under `dream_results/`. Milestone 4 runs this queue. A dead life is not given a new dream, and a pending dream is rejected instead of applied.
 
 `life.json` is what every process-start entry point reads before scheduling a start or restart: the scenario launch loop, `AgentProcess`'s exit restart, and MindServer `start-agent` and `restart-agent`. `lifecycle: dead` refuses the start. Missing `life.json` or `identity.json` on a directory that already has episodes is a hard error, not an implicit re-admission.
 
@@ -282,19 +283,18 @@ Death record fields are factual: `at`, `position`, `dimension`, `cause`, `server
 
 ### Validation the dream cannot bypass
 
-Applied when milestone 4 exists. Milestone 1 only reserves the files.
-
 - Reject any patch to `identity.json`, `verified_lessons.json`, `craft_ledger.json`, or `life.lifecycle`.
-- Reject a long-term or relationship row whose `source_episode_ids` are missing.
-- Reject inventory counts, command strings, and recipe lines that disagree with the ledger or `minecraft-data`.
-- Reject a death claim about a third person with no local episode of kind `observed` or `told`.
+- Reject a long-term or relationship row whose `source_episode_ids` are missing or unknown.
+- A fact that does not overlap the cited episodes, or that invents a motive ("knew I was upset", "to comfort me"), is dropped. The journal may still say how the inhabitant felt.
+- Reject inventory counts, command strings, and recipe lines in the journal or brief that disagree with the ledger or the cited episodes.
+- Reject a death claim about a third person with no local episode that already contains that cause. Finding a marker with a name is not the same as knowing how that person died.
 - If validation fails, keep the previous `morning.json` and append nothing to the journal.
 
 ## What stays out of both trees
 
 - Observer-only aggregates (population counts, "who knows about the death") computed at read time from runtime files. They are not written back into any inhabitant file.
 - Model prompts. Shared prompt text stays in `profiles/defaults/`. The village inserts identity from `identity.json` at prompt-build time, not from a profile that has drifted since admission.
-- The 500-character summary algorithm. It may still run inside the copied `memory.json` for conversation continuity. It is not `long_term.json`.
+- The 500-character summary algorithm. Survival sessions still generate it and put it in the decision prompt. A village session leaves the existing string in `memory.json`, does not spend a model call to refresh it, and does not insert it into decision, planning, reflection, or conversation prompts. Recent turns remain the conversational window. It is not `long_term.json`.
 
 ## Launch
 
@@ -309,7 +309,7 @@ With `--scenario`, `settings.profiles` are not started and `settings.js` is not 
 
 To add an inhabitant, add `inhabitants/<id>.json`, list it in `scenario.json`, and optionally set a vacant plot's `occupant` to that id. Start the scenario again. The new directory is created. Existing lives are not recopied. Removing a path from `scenario.json` does not delete `runtime/scenarios/<scenario_id>/<id>/` and does not set `dead`.
 
-Agent files for a village life (memory, histories, plan, verified lessons, last profile, logs, screenshots, action code) are written under `runtime/scenarios/<scenario_id>/<inhabitant_id>/` via `settings.agent_data_root`. The dream model is stored as `settings.dream_model` and no dream client is constructed. The day model is the profile `model` passed through the existing prompter merge. Decision prompts append a compact block from the admission snapshot, this inhabitant's home knowledge, a few relationships, and a few episodes. A fixture block is about 1,100 characters. The 500-character summary in `memory.json` still runs and is not the factual store.
+Agent files for a village life (memory, histories, plan, verified lessons, last profile, logs, screenshots, action code) are written under `runtime/scenarios/<scenario_id>/<inhabitant_id>/` via `settings.agent_data_root`. The dream model is stored as `settings.dream_model`. The dream client is built only for a claimed sleep job. The day model is the profile `model` passed through the existing prompter merge. Decision prompts append a compact block from the admission snapshot, this inhabitant's home knowledge, the morning brief and stance, the active intention when one exists, a few relationships, and a few episodes. The dream's sixty-episode window is not copied into that block. The 500-character summary stays in `memory.json` and is left out of those prompts.
 
 The autonomous loop is started with a fixed preamble that `usableGoal` does not treat as an ambition. It is not the survival `init_message`.
 

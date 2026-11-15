@@ -14,6 +14,8 @@ import { attributeTurnsForSummary, durableMemoryView, isTransientMemoryTurn, str
 import { formatKnownFacts } from '../agent/lessons.js';
 import { agentDataDir } from '../agent/data_dir.js';
 import { appendVillageContext, renderVillageContext, wantsVillagePrompt } from '../village/context.js';
+import { adaptVillagePrompt, villagePlanPrompt, villageSelfPromptLine } from '../village/voice.js';
+import { watchDayModel } from '../village/day_pulse.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -184,6 +186,7 @@ export class Prompter {
         const includeVillage = settings.village_autonomy === true
             && settings.agent_data_root
             && wantsVillagePrompt(prompt);
+        if (settings.village_autonomy === true) prompt = adaptVillagePrompt(prompt);
         prompt = prompt.replaceAll('$NAME', this.agent.name);
 
         if (prompt.includes('$STATS')) {
@@ -219,23 +222,31 @@ export class Prompter {
         }
         if (prompt.includes('$KNOWN_FACTS'))
             prompt = prompt.replaceAll('$KNOWN_FACTS', formatKnownFacts(this.agent));
-        if (prompt.includes('$MEMORY'))
-            prompt = prompt.replaceAll('$MEMORY', durableMemoryView(this.agent.history.memory));
+        if (prompt.includes('$MEMORY')) {
+            const memory = settings.village_autonomy === true
+                ? ''
+                : durableMemoryView(this.agent.history.memory);
+            prompt = prompt.replaceAll('$MEMORY', memory);
+        }
         if (prompt.includes('$TO_SUMMARIZE'))
             prompt = prompt.replaceAll('$TO_SUMMARIZE', stringifyTurns(to_summarize));
         if (prompt.includes('$CONVO'))
             prompt = prompt.replaceAll('$CONVO', 'Recent conversation:\n' + stringifyTurns(messages));
         if (prompt.includes('$SELF_PROMPT')) {
-            // if active or paused, show the current goal
-            let self_prompt = !this.agent.self_prompter.isStopped() ? `YOUR CURRENT ASSIGNED GOAL: "${this.agent.self_prompter.prompt}"\n` : '';
+            const current = this.agent.self_prompter?.prompt || '';
+            const self_prompt = settings.village_autonomy === true
+                ? villageSelfPromptLine(current, { stopped: this.agent.self_prompter?.isStopped?.() })
+                : (!this.agent.self_prompter.isStopped() ? `YOUR CURRENT ASSIGNED GOAL: "${current}"\n` : '');
             prompt = prompt.replaceAll('$SELF_PROMPT', self_prompt);
         }
         if (prompt.includes('$PLAN')) {
             // Nothing is injected while persistent planning is disabled.
             let plan = '';
             if (this.agent.plan_manager?.enabled) {
-                plan = (this.agent.plan_manager.formatForPrompt() ||
-                    'PERSISTENT PLAN\nNo plan has been selected yet.') + '\n';
+                plan = settings.village_autonomy === true
+                    ? villagePlanPrompt(this.agent.plan_manager)
+                    : (this.agent.plan_manager.formatForPrompt() ||
+                        'PERSISTENT PLAN\nNo plan has been selected yet.') + '\n';
             }
             prompt = prompt.replaceAll('$PLAN', plan);
         }
@@ -263,6 +274,11 @@ export class Prompter {
             const intention = this.agent.self_prompter?.prompt || '';
             const village = renderVillageContext(settings.agent_data_root, { intention });
             prompt = appendVillageContext(prompt, village.text);
+            const morning = village.text.includes('This morning you remember');
+            const personal = village.text.includes('Current intention:');
+            const summary = String(this.agent.history?.memory || '').trim();
+            const legacy = summary.length > 24 && prompt.includes(summary.slice(0, 40));
+            console.log(`[village-context] ${this.agent.name} chars=${village.chars} morning=${morning} intention=${personal} legacy_summary=${legacy ? 'present' : 'omitted'}`);
         }
 
         // check if there are any remaining placeholders with syntax $<word>
@@ -308,6 +324,7 @@ export class Prompter {
             let generation;
 
             try {
+                watchDayModel(true);
                 generation = await this.chat_model.sendRequest(contextMessages, prompt);
                 if (typeof generation !== 'string') {
                     console.error('Error: Generated response is not a string', generation);
@@ -319,6 +336,8 @@ export class Prompter {
             } catch (error) {
                 console.error('Error during message generation or file writing:', error);
                 continue;
+            } finally {
+                watchDayModel(false);
             }
 
             // Check for hallucination or invalid output
@@ -394,6 +413,8 @@ export class Prompter {
             : `${prompt}\n\n${context}`;
         prompt = await this.replaceStrings(prompt, []);
         let response;
+        watchDayModel(true);
+        try {
         if (typeof this.chat_model.complete === 'function') {
             // One-shot call with room for a multi-step JSON plan (the chat
             // profile caps output at 512 tokens, which truncates build plans)
@@ -411,6 +432,9 @@ export class Prompter {
             response = await this.chat_model.sendRequest([], prompt);
         }
         await this._saveLog(prompt, [], response, 'planning');
+        } finally {
+            watchDayModel(false);
+        }
         const proposal = parseJsonObject(response);
         if (!proposal || typeof proposal.objective !== 'string' || !Array.isArray(proposal.steps)) {
             console.warn(`[${this.agent.name}] Could not parse a valid persistent plan:`, response);

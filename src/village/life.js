@@ -64,6 +64,15 @@ export function transitionLife(life, next, cause) {
     throw new ScenarioError(`Unknown lifecycle '${next}'.`);
 }
 
+/** Activity is temporary. It is not a lifecycle and it does not block restart. */
+export function setActivity(dataRoot, activity) {
+    const life = readLife(dataRoot);
+    if (!life || life.lifecycle !== 'alive') return life;
+    if (activity !== 'awake' && activity !== 'asleep' && activity !== null) return life;
+    if (life.activity === activity) return life;
+    return writeLife(dataRoot, { ...life, activity, updated_at: new Date().toISOString() });
+}
+
 export function markDeadForTest(dataRoot, death = null) {
     const life = readLife(dataRoot);
     if (!life) throw new ScenarioError('Cannot mark a missing life dead.');

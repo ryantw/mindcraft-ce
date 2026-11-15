@@ -34,6 +34,10 @@ export class History {
     }
 
     async summarizeMemories(turns) {
+        // Village continuity is the morning brief, intention, and episodes.
+        // Regenerating the 500-character summary spends a model call to produce
+        // a competing objective. The previous string stays in memory.json.
+        if (settings.village_autonomy === true) return;
         console.log("Storing memories...");
         this.memory = await this.agent.prompter.promptMemSaving(turns);
 

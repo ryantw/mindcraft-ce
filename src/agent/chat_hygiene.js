@@ -118,6 +118,20 @@ export function stripCommandSyntax(text) {
     return tidy(String(text ?? '').replace(/!(\w+)(?:\s*\([^)]*\))?/g, (match, name) => (commandExists(name) ? '' : match)));
 }
 
+/**
+ * Words a village inhabitant may say aloud. Command syntax, including invented
+ * commands such as !say and !talkTo, stays out of the conversation.
+ */
+export function villageSpokenWords(message, commandName = null) {
+    let speech = String(message ?? '');
+    if (commandName) {
+        const at = speech.indexOf(commandName);
+        if (at >= 0) speech = speech.slice(0, at);
+    }
+    speech = speech.replace(/!\w+(?:\([^)]*\))?/g, '');
+    return tidy(speech);
+}
+
 const TRANSIENT_MEMORY_ACKNOWLEDGMENTS = [
     /^(?:sure[,!]?\s*)?i(?:'ll| will)\s+stop(?:\s+fighting)?[.!]?$/i,
     /^i(?:'ve| have)\s+stopped[.!]?(?:\s+what(?:(?:'s| is))?\s+next\??)?$/i,

@@ -152,7 +152,12 @@ export function parseCommandMessage(message) {
     else args = [];
 
     const command = getCommand(commandName);
-    if(!command) return `${commandName} is not a command.`
+    if(!command) {
+        const speech = settings.village_autonomy === true
+            ? ' Speak with ordinary words. There is no !say or !talkTo.'
+            : '';
+        return `${commandName} is not a command.${speech}`;
+    }
 
     const params = commandParams(command);
     const paramNames = commandParamNames(command);
@@ -429,6 +434,9 @@ export function getCommandDocs(agent) {
     let docs = `\n*COMMAND DOCS\n You can use the following commands to perform actions and get information about the world. 
     A command that lists parameters is invalid without them. Write !placeHere("cobblestone") or !digDown(4), not !placeHere or !digDown. Bare words inside parentheses are accepted: !placeHere(cobblestone).\n
     Do not use codeblocks. Use double quotes for strings. Only use one command in each response, trailing commands and comments will be ignored.\n`;
+    if (settings.village_autonomy === true) {
+        docs += 'To speak to someone nearby, write ordinary words. There is no !say and no !talkTo. Command syntax is not conversation; only the words before a command are heard.\n';
+    }
     for (let command of commandList) {
         if (agent.blocked_actions.includes(command.name) || command.operatorOnly) {
             continue;

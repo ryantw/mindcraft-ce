@@ -302,6 +302,17 @@ export function validationBehaviorKey(commandName) {
 }
 
 /**
+ * Searches and collection attempts for one block type are the same behavior
+ * when only the radius or the requested count changes.
+ */
+export function resourceAttemptKey(action, params = {}) {
+    if (action !== 'searchForBlock' && action !== 'searchForEntity' && action !== 'collectBlocks') return null;
+    const type = params?.type;
+    if (typeof type !== 'string' || !type.trim()) return null;
+    return `${action}:${type.toLowerCase()}`;
+}
+
+/**
  * How many times this attempt, or an equivalent one, has already failed.
  * Malformed commands group by command name. digDown groups by column and
  * stop reason. Construction groups by the exact set of target blocks.
@@ -327,6 +338,8 @@ export function blockingRepeatCount(counts, { commandKey, commandName, action, p
             if (key.startsWith(marker)) highest = Math.max(highest, count);
         }
     }
+    const resource = resourceAttemptKey(action, params);
+    if (resource) highest = Math.max(highest, counts.get(resource) || 0);
     return highest;
 }
 

@@ -1,10 +1,10 @@
 # Village simulation vision
 
-Spec-Version: 0.5.1
-Status: Accepted design. Milestones 1, 2, and 3 are implemented. Later milestones are not.
+Spec-Version: 0.6.0
+Status: Accepted design. Milestones 1 through 4 are implemented. Later milestones are not.
 Date: 2026-11-15
 
-Revised from 0.5.0. The product intent is unchanged. Milestone 3 gives each inhabitant a private mind and connects a verified Minecraft death to the terminal life state. Automated tests and the disposable live check are both recorded. Dreams, the observer dashboard, and sleep deprivation remain later milestones. The live check did not use Village Alpha.
+Revised from 0.5.0. The product intent is unchanged. Milestones 1 through 4 are implemented, including private minds, verified death, and sleep-triggered dreams. The observer dashboard and sleep deprivation remain later. The live checks did not use Village Alpha.
 
 This document is the product intent for an autonomous Minecraft social simulation built on Mindcraft CE. It does not authorize implementation by itself. Architecture, milestones, and file schemas are in the sibling documents.
 
