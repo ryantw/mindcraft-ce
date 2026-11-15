@@ -13,6 +13,7 @@ import convoManager from '../agent/conversation.js';
 import { attributeTurnsForSummary, durableMemoryView, isTransientMemoryTurn, stripCommandSyntax } from '../agent/chat_hygiene.js';
 import { formatKnownFacts } from '../agent/lessons.js';
 import { agentDataDir } from '../agent/data_dir.js';
+import { appendVillageContext, renderVillageContext, wantsVillagePrompt } from '../village/context.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -180,6 +181,9 @@ export class Prompter {
     }
 
     async replaceStrings(prompt, messages, examples=null, to_summarize=[], last_goals=null) {
+        const includeVillage = settings.village_autonomy === true
+            && settings.agent_data_root
+            && wantsVillagePrompt(prompt);
         prompt = prompt.replaceAll('$NAME', this.agent.name);
 
         if (prompt.includes('$STATS')) {
@@ -253,6 +257,12 @@ export class Prompter {
                 }
                 prompt = prompt.replaceAll('$BLUEPRINTS', blueprints.slice(0, -2));
             }
+        }
+
+        if (includeVillage) {
+            const intention = this.agent.self_prompter?.prompt || '';
+            const village = renderVillageContext(settings.agent_data_root, { intention });
+            prompt = appendVillageContext(prompt, village.text);
         }
 
         // check if there are any remaining placeholders with syntax $<word>

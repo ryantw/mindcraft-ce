@@ -1,10 +1,10 @@
 # Village simulation roadmap
 
-Spec-Version: 0.4.0
-Status: Milestones 1 and 2 are implemented. Later milestones are not.
+Spec-Version: 0.5.0
+Status: Milestones 1, 2, and 3 are implemented. Later milestones are not.
 Date: 2026-11-15
 
-Revised from 0.3.0. Milestone 2 now has a furnished plains village in its own world. Milestone order is unchanged. Live permadeath and dreaming stay later.
+Revised from 0.4.0. Milestone 3 adds private identity, episodes, relationships, local speech, and a durable death transition. Dreaming stays later. The milestone was not run against the live Village Alpha server.
 
 Milestones are sequential. A later milestone may be designed against this document, but it is not started until the previous milestone's acceptance criteria are met. The recommended first implementation is milestone 1.
 
@@ -87,7 +87,9 @@ Personality-driven play, death, dreams, refilling chests, asking agents to const
 
 ## Milestone 3 — Identity, memory, local knowledge, death
 
-Private minds and permanent death, still on the daytime model only.
+Status: Implemented.
+
+Private minds and permanent death, still on the daytime model only. The day prompt reads `identity.json`, `knowledge.json`, `relationships.json`, and a short slice of `episodes.json` from that inhabitant's directory. Ordinary speech is audible within `settings.hearing_blocks` (32 on village-alpha) of a loaded body. A verified death writes `lifecycle: dead` before the process exits with code 0, so the supervisor does not restart it. Survival agents still respawn and continue. Physical remains are a named armor stand with the tag `village_remains`, placed only by `scripts/village/place-remains.js` after an operator confirms a safe block. The agent does not summon it, and this milestone did not place one in Village Alpha. Automated coverage is `tests/village_minds.test.js`. A disposable live server was not started.
 
 ### Definition of done
 

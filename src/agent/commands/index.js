@@ -1,13 +1,15 @@
 import { getBlockId, getItemId } from "../../utils/mcdata.js";
 import { actionsList } from './actions.js';
 import { queryList } from './queries.js';
+import { villageCommands } from './village.js';
 import { releaseWikiSearchBlock } from './wiki_search.js';
 import { noteReflectionAction, reflectionStatus } from '../reasoning.js';
 import { makeValidationOutcome, validationBehaviorKey } from '../action_outcome.js';
+import settings from '../settings.js';
 
 let suppressNoDomainWarning = true;
 
-const commandList = queryList.concat(actionsList);
+const commandList = queryList.concat(actionsList, villageCommands);
 const commandMap = {};
 for (let command of commandList) {
     commandMap[command.name] = command;
@@ -364,6 +366,9 @@ export async function executeCommand(agent, message, { operator = false } = {}) 
             console.warn(`[${agent.name}] Blocked autonomous ${command.name}`);
             return `Command ${command.name} is reserved for the human operator. Choose a different action.`;
         }
+        if (command.villageOnly && settings.village_autonomy !== true) {
+            return `Command ${command.name} is not part of this session. Choose a different action.`;
+        }
         let numArgs = 0;
         if (parsed.args) {
             numArgs = parsed.args.length;
@@ -426,6 +431,9 @@ export function getCommandDocs(agent) {
     Do not use codeblocks. Use double quotes for strings. Only use one command in each response, trailing commands and comments will be ignored.\n`;
     for (let command of commandList) {
         if (agent.blocked_actions.includes(command.name) || command.operatorOnly) {
+            continue;
+        }
+        if (command.villageOnly && settings.village_autonomy !== true) {
             continue;
         }
         if (command.requiresPersistentPlanning && !agent.plan_manager?.enabled) {

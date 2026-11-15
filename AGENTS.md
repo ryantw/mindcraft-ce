@@ -4,7 +4,7 @@ Mindcraft CE is an experimental Minecraft agent stack (Mineflayer plus a local o
 
 ## Village simulation
 
-A separate social-simulation experiment is specified in Spec-Version 0.4.0. Milestones 1 and 2 are implemented. Milestones 3–7 are not. Milestone 2's world is a separate Paper 1.21.6 server, not the survival server. Before adding or changing anything that affects inhabitants, scenarios, memory, sleep, death, or the observer view of those lives, read:
+A separate social-simulation experiment is specified in Spec-Version 0.5.0. Milestones 1, 2, and 3 are implemented. Milestones 4–7 are not. Milestone 2's world is a separate Paper 1.21.6 server, not the survival server. Before adding or changing anything that affects inhabitants, scenarios, memory, sleep, death, or the observer view of those lives, read:
 
 - `docs/village-simulation/VISION.md`
 - `docs/village-simulation/ARCHITECTURE.md`
@@ -20,6 +20,8 @@ Select a scenario with `node main.js --scenario village-alpha` or `node main.js 
 The current survival run is not the village. Leave `settings.js` (`init_message`, `host`, `port`, `minecraft_version`, `auth`), `profiles/agent_0*.json`, and `bots/Finn`, `bots/Sawyer`, `bots/Milo`, `bots/Jasper`, and `bots/Rowan` in place. A village scenario carries its own connection and its own `runtime/scenarios/<id>/` tree. Do not reset those memories, edit them to match the spec, restart those agents, or change either Minecraft world as part of documentation or unrelated work.
 
 When implementing milestone 1, keep these rules: plots own home assignment; admission writes `identity.json` once and never recopies it, seed relationships, or supplies on restart; `dead` is terminal for every start path, including supervisor restart and operator start; crash and disconnect are `absent`; a village inhabitant with no intention and no ambition still runs the autonomous loop; the survival startup goal path stays as it is when no scenario is selected. Dream scheduling is milestone 4. Do not block the dream design on the body staying asleep, and do not treat sleep deprivation as license to corrupt stored memory.
+
+Milestone 3 reads the admission snapshot into the day prompt and writes `knowledge.json`, `episodes.json`, and stance updates under that inhabitant's runtime directory. Ordinary village speech is limited to `hearing_blocks` (32 on village-alpha). `permanent_death: true` on a scenario writes `dead` on a verified death and exits the process. Survival agents still respawn. Do not start the village-alpha inhabitants, and do not run `scripts/village/place-remains.js` against Village Alpha or the survival world unless the operator names that target. Offline usernames are not credentials: the supervisor will not relaunch a dead life, but another client can still connect with the same name. A disposable live check uses a copied world, a new container, a new port, a new scenario id, and temporary names. Do not point it at `127.0.0.1:25566` or port 25565.
 
 Reuse the existing agent, planner, action outcomes, lessons, construction, conversation hygiene, and MindServer. The architecture document lists the modules. Do not create a parallel bot runtime or a second command language.
 

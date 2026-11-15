@@ -24,6 +24,10 @@ import { maybeAutoReflect, recordCommandResult } from './reflection_triggers.js'
 import { reflectionState } from './reasoning.js';
 import { resumePausedAutonomy, systemObservation } from './system_events.js';
 import { sanitizeIncomingPeerMessage, sanitizeOutgoingChat } from './chat_hygiene.js';
+import { loadVillagePlaces } from '../village/knowledge.js';
+import { buildDeathFacts, recordVerifiedDeath } from '../village/death.js';
+import { noteNearbyRemains, recordVillageAction, recordVillageSpeech } from '../village/experience.js';
+import { acceptInWorldSpeech, DEFAULT_HEARING_BLOCKS, speakerDistance } from '../village/locality.js';
 
 export class Agent {
     async start(load_mem=false, init_message=null, count_id=0) {
@@ -52,6 +56,7 @@ export class Agent {
         this.coder = new Coder(this);
         this.npc = new NPCContoller(this);
         this.memory_bank = new MemoryBank();
+        loadVillagePlaces(this.memory_bank);
         this.self_prompter = new SelfPrompter(this);
         this.plan_manager = new PlanManager(this);
         convoManager.initAgent(this);
@@ -189,9 +194,22 @@ export class Agent {
 
 		this.respondFunc = respondFunc;
 
-        this.bot.on('whisper', respondFunc);
+        const hearNearby = (username, message) => {
+            if (settings.village_autonomy === true) {
+                const range = settings.village_hearing_blocks || DEFAULT_HEARING_BLOCKS;
+                const distance = speakerDistance(this.bot, username);
+                if (!acceptInWorldSpeech({ village: true, distance, range })) return;
+            }
+            return respondFunc(username, message);
+        };
+
+        this.bot.on('whisper', hearNearby);
         
         this.bot.on('chat', (username, message) => {
+            if (settings.village_autonomy === true) {
+                hearNearby(username, message);
+                return;
+            }
             if (serverProxy.getNumOtherAgents() > 0) return;
             // only respond to open chat messages when there are no other agents
             respondFunc(username, message);
@@ -358,6 +376,7 @@ export class Agent {
         }
 
         const self_prompt = source === 'system' || source === this.name;
+        if (!self_prompt) recordVillageSpeech(settings.agent_data_root, { speaker: source, text: message });
         const from_other_bot = convoManager.isOtherAgent(source);
         const contextKind = self_prompt ? 'autonomous' : from_other_bot ? 'peer' : 'human';
 
@@ -624,6 +643,11 @@ export class Agent {
                     });
                     const reflection = await maybeAutoReflect(this, problemKey);
                     if (reflection) await this.history.add('system', reflection);
+                    recordVillageAction(settings.agent_data_root, {
+                        commandName: command_name,
+                        failed,
+                        resultText: outcome,
+                    });
                 } catch (error) {
                     console.warn(`[${this.name}] Automatic reflection error: ${error.message}`);
                 }
@@ -754,6 +778,22 @@ export class Agent {
             }
         });
         this.bot.on('death', () => {
+            const position = this.bot.entity?.position;
+            if (position) this._deathPosition = { x: position.x, y: position.y, z: position.z };
+            if (settings.village_permadeath === true) {
+                this.actions.cancelResume();
+                this.self_prompter.interrupt = true;
+                this.self_prompter.state = 0;
+                clearTimeout(this._deathTimer);
+                this._deathTimer = setTimeout(() => {
+                    this._retireVillageLife(buildDeathFacts({
+                        position: this._deathPosition,
+                        dimension: this.bot.game?.dimension,
+                        name: this.name,
+                    }));
+                }, 500);
+                return;
+            }
             this.actions.cancelResume();
             Promise.resolve(this.actions.stop()).finally(() => {
                 resumePausedAutonomy(this, 'death', convoManager.inConversation());
@@ -767,6 +807,17 @@ export class Agent {
         });
         this.bot.on('messagestr', async (message, _, jsonMsg) => {
             if (jsonMsg.translate && jsonMsg.translate.startsWith('death') && message.startsWith(this.name)) {
+                if (settings.village_permadeath === true) {
+                    clearTimeout(this._deathTimer);
+                    this._retireVillageLife(buildDeathFacts({
+                        position: this._deathPosition || this.bot.entity?.position,
+                        dimension: this.bot.game?.dimension,
+                        translate: jsonMsg.translate,
+                        message,
+                        name: this.name,
+                    }));
+                    return;
+                }
                 console.log('Agent died: ', message);
                 let death_pos = this.bot.entity.position;
                 this.memory_bank.rememberPlace('last_death_position', death_pos.x, death_pos.y, death_pos.z);
@@ -816,6 +867,19 @@ export class Agent {
     async update(delta) {
         await this.bot.modes.update();
         this.self_prompter.update(delta);
+        if (settings.village_autonomy === true) {
+            this._remainsScan = (this._remainsScan || 0) + delta;
+            if (this._remainsScan > 5000) {
+                this._remainsScan = 0;
+                try {
+                    noteNearbyRemains(settings.agent_data_root, this.bot, {
+                        range: settings.village_hearing_blocks || DEFAULT_HEARING_BLOCKS,
+                    });
+                } catch (error) {
+                    console.warn(`[${this.name}] Remains scan skipped: ${error.message}`);
+                }
+            }
+        }
         await this.checkTaskDone();
     }
 
@@ -823,6 +887,22 @@ export class Agent {
         return !this.actions.executing;
     }
     
+
+    _retireVillageLife(facts) {
+        if (this._retiredLife) return;
+        this._retiredLife = true;
+        clearTimeout(this._deathTimer);
+        try {
+            if (settings.agent_data_root) recordVerifiedDeath(settings.agent_data_root, facts);
+        } catch (error) {
+            console.error(`[${this.name}] Death was not durable: ${error.message}`);
+        }
+        this.self_prompter.interrupt = true;
+        this.self_prompter.state = 0;
+        try { this.actions?.cancelResume?.(); } catch { /* already idle */ }
+        try { this.bot?.end?.('permanent death'); } catch { /* socket already closed */ }
+        process.exit(0);
+    }
 
     cleanKill(msg='Killing agent process...', code=1) {
         console.error(`[cleanKill] ${this.name}: ${msg} (exit code ${code})`);

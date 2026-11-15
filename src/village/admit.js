@@ -4,6 +4,7 @@ import { assertOutsideSurvivalBots } from '../agent/data_dir.js';
 import { ScenarioError } from './errors.js';
 import { profileChecksum } from './identity.js';
 import { createAdmittedLife, readLife, writeLife } from './life.js';
+import { ensureStartingKnowledge } from './knowledge.js';
 
 function readJson(file) {
     return JSON.parse(readFileSync(file, 'utf8'));
@@ -104,6 +105,7 @@ export function admitInhabitant(bundle, profile, { runtimeRoot, now = () => new 
         writeJson(identityFile, snapshot);
         writeJson(relationshipFile, relationshipsFrom(profile, admittedAt));
         writeLife(dir, createAdmittedLife(admittedAt));
+        ensureStartingKnowledge(dir, bundle.village, profile.id, snapshot.home_plot_id);
         remember(runtimeRoot, bundle.scenario.id, profile.id);
         return { id: profile.id, directory: dir, created: true, profile };
     }
@@ -143,6 +145,7 @@ export function admitInhabitant(bundle, profile, { runtimeRoot, now = () => new 
         next.updated_at = admittedAt;
         writeLife(dir, next);
     }
+    ensureStartingKnowledge(dir, bundle.village, profile.id, snapshot.home_plot_id);
     remember(runtimeRoot, bundle.scenario.id, profile.id);
     return { id: profile.id, directory: dir, created: false, profile, life: changed ? next : life };
 }

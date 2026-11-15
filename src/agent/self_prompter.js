@@ -1,4 +1,5 @@
 import { reflect } from './reasoning.js';
+import { VILLAGE_AUTONOMY_PREAMBLE, VILLAGE_DECISION_INTERVAL_MS, villageDecisionMessage } from './startup_goal.js';
 
 const STOPPED = 0
 const ACTIVE = 1
@@ -16,6 +17,7 @@ export class SelfPrompter {
         this.recovery_backoff = 10000;
         this.max_recovery_backoff = 120000;
         this.recovery_attempts = 0;
+        this.village_interval = VILLAGE_DECISION_INTERVAL_MS;
     }
 
     start(prompt) {
@@ -76,20 +78,28 @@ export class SelfPrompter {
         let no_command_count = 0;
         try {
             while (this._shouldContinue()) {
-                await this.agent.plan_manager?.ensurePlan?.();
+                const choosing = this.prompt === VILLAGE_AUTONOMY_PREAMBLE;
+                if (!choosing) await this.agent.plan_manager?.ensurePlan?.();
                 if (!this._shouldContinue()) break;
                 const activePlan = this.agent.plan_manager?.getCurrentPlan?.();
                 const activeStep = this.agent.plan_manager?.getCurrentStep?.();
                 const planText = activePlan && activeStep
                     ? ` Your persistent objective is '${activePlan.objective}'. The current verified step is '${activeStep.description}'.`
                     : '';
-                const msg = `You are self-prompting with the broad goal: '${this.prompt}'.${planText} ` +
+                const msg = choosing
+                    ? villageDecisionMessage()
+                    : `You are self-prompting with the broad goal: '${this.prompt}'.${planText} ` +
                     `Retain freedom to react to safety, the environment, and social interaction, but otherwise advance the current plan. ` +
                     `Your next response MUST contain a command with this syntax: !commandName. Respond:`;
 
                 const used_command = await this.agent.handleMessage('system', msg, -1);
                 if (!this._shouldContinue())
                     break;
+
+                if (!used_command && choosing) {
+                    await this._wait(this.village_interval);
+                    continue;
+                }
 
                 if (!used_command) {
                     if (this.agent.actions?.repeatSuppressed) {

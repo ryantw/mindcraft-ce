@@ -212,12 +212,20 @@ export function validateScenario(bundle, { reservedNames = [], knownRuntimeIds =
     }
     assertInside(directory, scenario.village, 'village path');
 
-    exactKeys(scenario.settings, ['base_profile', 'allow_insecure_coding', 'load_memory'], 'scenario.settings');
+    exactKeys(scenario.settings, ['base_profile', 'allow_insecure_coding', 'load_memory', 'permanent_death', 'hearing_blocks'], 'scenario.settings');
     requireKeys(scenario.settings, ['base_profile', 'allow_insecure_coding'], 'scenario.settings');
     if (!BASE_PROFILES.has(scenario.settings.base_profile)) fail(`base_profile '${scenario.settings.base_profile}' is not a shared Mindcraft baseline.`);
     if (scenario.settings.allow_insecure_coding !== false) fail('Insecure village configuration: allow_insecure_coding must be false.');
     if (scenario.settings.load_memory !== undefined && typeof scenario.settings.load_memory !== 'boolean') {
         fail('scenario.settings.load_memory must be a boolean.');
+    }
+    if (scenario.settings.permanent_death !== undefined && typeof scenario.settings.permanent_death !== 'boolean') {
+        fail('scenario.settings.permanent_death must be a boolean.');
+    }
+    if (scenario.settings.hearing_blocks !== undefined) {
+        if (!isInteger(scenario.settings.hearing_blocks) || scenario.settings.hearing_blocks < 8 || scenario.settings.hearing_blocks > 128) {
+            fail('scenario.settings.hearing_blocks must be an integer from 8 to 128.');
+        }
     }
 
     const { occupants } = validateVillage(village);

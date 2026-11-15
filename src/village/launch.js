@@ -21,6 +21,8 @@ export function buildAgentSettings(bundle, profile, survivalSettings, { runtimeR
     settings.load_memory = scenario.settings.load_memory !== false;
     settings.init_message = null;
     settings.village_autonomy = true;
+    settings.village_permadeath = scenario.settings.permanent_death === true;
+    settings.village_hearing_blocks = scenario.settings.hearing_blocks || 32;
     settings.village_scenario_id = scenario.id;
     settings.village_inhabitant_id = profile.id;
     settings.dream_model = structuredClone(scenario.models.dream);

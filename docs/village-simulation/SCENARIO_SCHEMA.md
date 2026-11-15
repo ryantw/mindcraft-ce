@@ -1,6 +1,6 @@
 # Village simulation scenario schema
 
-Spec-Version: 0.4.0
+Spec-Version: 0.5.0
 Status: Schema version 1 is loaded by the application.
 Date: 2026-11-15
 
@@ -60,7 +60,9 @@ Name collision rule: an inhabitant id or Minecraft name used by the survival run
   "settings": {
     "base_profile": "survival",
     "allow_insecure_coding": false,
-    "load_memory": true
+    "load_memory": true,
+    "permanent_death": true,
+    "hearing_blocks": 32
   }
 }
 ```
@@ -75,6 +77,8 @@ Rules:
 - `models.day` and `models.dream` are required and may be changed without code edits. They use the same provider records Mindcraft already accepts (`api`, `model`, optional `params`).
 - `settings.allow_insecure_coding` must be false. Validation fails closed if it is true or missing.
 - `settings.base_profile` selects the shared gameplay defaults (`survival` unless a future village base profile is added). It does not select a personality.
+- `settings.permanent_death` is optional. `true` retires a verified death of that body. Omitted or `false` keeps the survival respawn-and-continue behavior. Village Alpha sets `true`.
+- `settings.hearing_blocks` is optional, an integer from 8 to 128. Omitted means 32. It is the radius for ordinary speech in a village session.
 - No field here assigns a profession, a settlement quest, or a lifelong ambition.
 
 The scenario does not embed `settings.init_message` and must not overwrite it. The survival message stays the default for `node main.js` with no scenario. A village run has no assigned ambition. That does not stop the autonomous loop. Milestone 1 adds the scenario-level hook described in [ARCHITECTURE.md](ARCHITECTURE.md). Current intentions, when they exist, come from runtime after milestone 4. Long-term ambitions are never a scenario field.
@@ -215,9 +219,11 @@ Created on admission. Never copied from another inhabitant.
 | --- | --- | --- |
 | `identity.json` | Admission snapshot. See below. Written once. | Admission only. Never rewritten by restart, profile edits, or dreams. |
 | `life.json` | `lifecycle` (`admitted`, `alive`, `absent`, `dead`), `activity` (`awake`, `asleep`, or `null`), timestamps, optional death record `{at, position, evidence}`, optional `identity_mismatch`. | Supervisor and the death path. Activity is rebuilt on process start. Not the dream model. |
-| `episodes.json` | Append-only list of `{id, at, kind, text, refs}`. Kinds include `action`, `conversation`, `observed`, `told`. Cap the dream input at the most recent ~60 not-yet-consolidated plus any pinned. | Code, from verified outcomes and accepted local perceptions. |
+| `knowledge.json` | Own home fixtures, public place markers, and `supplies_at_admission`. Written once. The supply list is the manifest at admission, not a live chest. | Admission. Not rewritten on restart. |
+| `places.json` | Named coordinates for `!goToPlace`. Starts from `knowledge.json` and keeps later `rememberPlace` calls. | The memory bank, when a village session is bound to this directory. |
+| `episodes.json` | Append-only list of `{id, at, kind, source, text, refs, pinned}`. Kinds are `action`, `conversation`, `observed`, `told`. Sources are `verified`, `observed`, `told`, `interpretation`. The dream input is the most recent ~60 unpinned episodes plus any pinned. Rows are not deleted to meet that cap. | Code, from verified outcomes and accepted local perceptions. `!stance` may add an `interpretation` row. |
 | `long_term.json` | Up to ~40 `{id, text, priority, source_episode_ids}`. | Dream output after validation. Code may drop low-priority stale rows. |
-| `relationships.json` | Map of other ids to `{stance, note, updated_at, source_episode_ids}`. | Seed copied once at admission, then dream or local social code. Seed copy does not rewrite the scenario file. |
+| `relationships.json` | Map of other ids to `{stance, note, updated_at, source_episode_ids, other_kind, opinion_episode_id}`. `other_kind` is `inhabitant` or `human` when a stance is recorded during play. Seeds omit it. | Seed copied once at admission. Later stance updates require an episode in this directory that names the person. A profile edit does not copy the seed again. |
 | `journal.json` | Append-only `{at, text}` entries. | Dream validation, one entry per successful dream. |
 | `morning.json` | `{brief, stance, intentions[]}`. Brief about ten lines. Intentions are one sentence each, maximum three. | Dream validation. Replaces the previous brief only on success. |
 | `craft_ledger.json` | One row per item: `{item, made, recipe, last_outcome}`. | Code from structured craft outcomes. |
@@ -262,14 +268,16 @@ On every start of an existing life:
 
 A bumped `profile_version` is still a mismatch. It is not a migration. Re-admission is a new inhabitant id.
 
-Death record fields are factual. A journal line about the death is subjective and exists only for inhabitants who received an `observed` or `told` episode.
+Death record fields are factual: `at`, `position`, `dimension`, `cause`, `server_message`, and `evidence`. `cause` is the server translation key, or `null` when the server did not distinguish one. `evidence.status` is `planned`, `placed`, or `unplaced`, with `reason` when nothing was placed. A journal line about the death is subjective and exists only for inhabitants who received an `observed` or `told` episode.
 
 ### Episode rules
 
 - `id` is unique per inhabitant.
-- `refs` may point at a command outcome, a position, or another inhabitant id who was the speaker. A `told` episode names the speaker and does not by itself count as the listener witnessing the event.
-- Another inhabitant's episode id is not a legal `refs` value.
+- `source` distinguishes a verified action, a direct observation, something someone said, and this inhabitant's interpretation. An interpretation is not a verified fact.
+- `refs` may point at a command outcome, a position, a place tag, or another person who was present or speaking. A `told` episode names the speaker and does not by itself count as the listener witnessing the event.
+- Another inhabitant's episode id is not a legal `refs` value. A stance may cite this inhabitant's own episode id.
 - Command syntax is not stored in `text`. The structured outcome already lives in the action system and the ledger.
+- An identical kind, source, text, and refs set is stored once. Movement, queries, and repeated unnamed failures are not episodes.
 
 ### Validation the dream cannot bypass
 
@@ -300,7 +308,7 @@ With `--scenario`, `settings.profiles` are not started and `settings.js` is not 
 
 To add an inhabitant, add `inhabitants/<id>.json`, list it in `scenario.json`, and optionally set a vacant plot's `occupant` to that id. Start the scenario again. The new directory is created. Existing lives are not recopied. Removing a path from `scenario.json` does not delete `runtime/scenarios/<scenario_id>/<id>/` and does not set `dead`.
 
-Agent files for a village life (memory, histories, plan, verified lessons, last profile, logs, screenshots, action code) are written under `runtime/scenarios/<scenario_id>/<inhabitant_id>/` via `settings.agent_data_root`. The dream model is stored as `settings.dream_model` and no dream client is constructed. The day model is the profile `model` passed through the existing prompter merge. Backstory text is not inserted into the day prompt until milestone 3; the admission snapshot is still the identity of record.
+Agent files for a village life (memory, histories, plan, verified lessons, last profile, logs, screenshots, action code) are written under `runtime/scenarios/<scenario_id>/<inhabitant_id>/` via `settings.agent_data_root`. The dream model is stored as `settings.dream_model` and no dream client is constructed. The day model is the profile `model` passed through the existing prompter merge. Decision prompts append a compact block from the admission snapshot, this inhabitant's home knowledge, a few relationships, and a few episodes. A fixture block is about 1,100 characters. The 500-character summary in `memory.json` still runs and is not the factual store.
 
 The autonomous loop is started with a fixed preamble that `usableGoal` does not treat as an ambition. It is not the survival `init_message`.
 
@@ -317,4 +325,6 @@ Implemented for files and the one-time copy. Milestone 2 is the world placement.
 7. Do not read any other inhabitant's runtime directory while building this one's prompt.
 8. Connect the process with `scenario.connection`, not with the survival host and port.
 
-Removing a person from `scenario.json` does not delete their runtime directory, does not clear their plot, and does not declare them dead. Death is only `lifecycle` set to `dead`, and that transition does not run in milestone 1 except in tests.
+Removing a person from `scenario.json` does not delete their runtime directory, does not clear their plot, and does not declare them dead. Death is only `lifecycle` set to `dead` by a verified death of that body, or by a test helper. Deleting or editing the profile does not create a new life for a dead id.
+
+Offline usernames are the Minecraft login. The supervisor will not start a dead life under that name. A different client can still join the offline server with the same name. Do not treat that username or its offline UUID as a credential. Human players continue to join as themselves.

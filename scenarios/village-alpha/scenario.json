@@ -45,6 +45,8 @@
   "settings": {
     "base_profile": "survival",
     "allow_insecure_coding": false,
-    "load_memory": true
+    "load_memory": true,
+    "permanent_death": true,
+    "hearing_blocks": 32
   }
 }

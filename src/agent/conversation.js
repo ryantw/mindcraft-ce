@@ -1,6 +1,7 @@
 import settings from './settings.js';
 import { containsCommand, stripUnsharedCommands } from './commands/index.js';
 import { sendBotChatToServer } from './mindserver_proxy.js';
+import { acceptInWorldSpeech, DEFAULT_HEARING_BLOCKS, speakerDistance } from '../village/locality.js';
 
 let agent;
 let agent_names = [];
@@ -308,6 +309,14 @@ class ConversationManager {
     }
 
     async receiveFromBot(sender, received) {
+        if (settings.village_autonomy === true) {
+            const range = settings.village_hearing_blocks || DEFAULT_HEARING_BLOCKS;
+            const distance = speakerDistance(agent?.bot, sender);
+            if (!acceptInWorldSpeech({ village: true, distance, range })) {
+                console.log(`[${agent?.name}] Did not hear ${sender}; no body is within ${range} blocks.`);
+                return;
+            }
+        }
         const convo = this._getConvo(sender);
 
         if (received.start && convo.cooldownRemaining() > 0) {

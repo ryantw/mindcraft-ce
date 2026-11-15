@@ -1,7 +1,7 @@
 # Village simulation architecture
 
-Spec-Version: 0.4.0
-Status: Accepted design. Milestones 1 and 2 are implemented. Later milestones are not.
+Spec-Version: 0.5.0
+Status: Accepted design. Milestones 1, 2, and 3 are implemented. Later milestones are not.
 Date: 2026-11-15
 
 Revised from 0.1.0. See [VISION.md](VISION.md) for the product changes. This document now separates lifecycle from activity, makes plots the only home assignment, and treats dreaming as a durable queue rather than a life state.
@@ -34,7 +34,7 @@ One inhabitant is still a Mindcraft agent process: `main.js` loads a profile, `c
 | Places | `src/agent/memory_bank.js` | In-process named coordinates, including `last_death_position`. Not written by `history.save`. Lost on process exit unless the chat summary happens to mention them. |
 | Short summary | `src/agent/history.js` | `bots/<name>/memory.json` holds a single summary string, sliced at 500 characters, plus the live turn window (`settings.max_messages`, currently 15). Older turns are appended under `bots/<name>/histories/`. The summary prompt tells the model to drop inventory, positions, commands, and routine outcomes. |
 | Observer shell | `src/mindcraft/mindserver.js` | Start, stop, restart, settings, chat, and bot output for the operator. It is not a journal or relationship viewer. |
-| Death today | `agent.js` death and `messagestr` handlers | The agent respawns. A system observation tells them to continue the current objective. Other inhabitants are not given a structured death fact, but public Minecraft chat and the MindServer message path are not a model of who was close enough to hear. |
+| Death today | `agent.js` death and `messagestr` handlers | Survival agents still respawn and are told to continue. A village scenario with `permanent_death: true` writes `dead` and exits the process instead. Other inhabitants are not given that record. |
 
 ### What the village must not duplicate
 
@@ -91,14 +91,14 @@ The admission snapshot copies the plot id it found at admission, or `null`. If a
 
 Agreed. Lifecycle is durable. Activity is temporary. Dreaming is not a lifecycle state.
 
-The current process only knows running and exited. Exit triggers an automatic restart (`AgentProcess` in `src/process/agent_process.js`). MindServer exposes `start-agent` and `restart-agent` (`src/mindcraft/mindserver.js`). Every one of those entry points, plus the scenario launch loop, must refuse a dead life. Milestone 1 tests that gate with fixtures. It does not implement permadeath inside a live Minecraft session.
+Exit of a living process still triggers an automatic restart (`AgentProcess` in `src/process/agent_process.js`) unless the exit code is 0 or the signal is SIGINT. MindServer `start-agent` and `restart-agent` call that same start path. Every one of those entry points refuses a dead life. A village death writes `dead` and then exits 0, so the automatic restart does not run. A crash or disconnect of a living inhabitant is still `absent` and can return.
 
 | Lifecycle | Meaning | How it changes |
 | --- | --- | --- |
 | `admitted` | Snapshot exists. Process has not taken the life into the world. | Created once, when the runtime directory is first made. |
 | `alive` | This life may be in the world and may act, sleep, or be mid-dream-job. | Start of a non-dead life. |
 | `absent` | Process is down. History unchanged. | Crash, network disconnect, or operator stop from `alive`. |
-| `dead` | This life is over. Irreversible. Files stay. | A verified death, from milestone 3 on. Milestone 1 only allows tests to set it. |
+| `dead` | This life is over. Irreversible. Files stay. | A verified death of this body when the scenario sets `permanent_death`. Tests can set the same state. |
 
 There is no transition out of `dead`. A second death event does not create a second life.
 
@@ -234,26 +234,28 @@ The survival planning prompt and `settings.init_message` stay in force for the s
 
 ## Knowledge, death, and evidence
 
-Agreed rules. The current code does not meet them yet.
-
 **Local knowledge.** An inhabitant learns by:
 
 - their own verified actions and the blocks and containers they personally open,
-- players and entities currently perceivable by the bot,
+- players and entities currently loaded on their client,
 - chat that actually reached them,
 - reading their own memory.
 
-They do not learn from another inhabitant's `memory.json`, journal, plan, or dream. They do not learn from the observer UI.
+They do not learn from another inhabitant's runtime files, and they do not learn from the observer UI. The day prompt reads only `identity.json`, `knowledge.json`, `relationships.json`, and `episodes.json` in its own directory.
 
-Open and required before milestone 3 is finished: today's multi-agent path ignores the public Mineflayer chat listener when other agents exist (`agent.js`) and routes talk through MindServer and `Conversation`. That path has no distance check. The simulation must define which messages are audible and must not treat a server-wide death broadcast or a MindServer fan-out as something every mind knows. Server `showDeathMessages` and the chat pipeline both need a decision.
+Ordinary speech, including Minecraft chat, whispers, and agent-to-agent MindServer messages, is accepted only when the speaker's body is loaded and within `hearing_blocks` (default 32, measured in Euclidean blocks). A speaker who is not loaded is not heard. That silence is not described as a death or an absence. Survival sessions do not use this filter: when other agents exist they still ignore public chat and accept MindServer messages at any distance. Operator messages sent through MindServer `send-message` stay on that administrative channel and are not distance-filtered. Village Alpha already sets `showDeathMessages false`. The dying agent's death message is not copied into anyone else's history.
 
-**Death.** Implemented behavior is respawn-and-continue. Agreed behavior is permadeath of that life:
+**Death.** Survival agents still respawn and continue. A scenario with `permanent_death: true` does not.
 
-- The life record stores when and where the body died, and the last public evidence (dropped items at that position, if the server drops them).
-- The process supervisor does not start them again.
+- The life record stores time, position, dimension, the server death-translation key when it is more specific than `death.attack.generic`, and the server message. A missing or generic key is stored as `cause: null`, which means unknown. The code does not invent a cause.
+- `dead` is written before the process exits. The exit code is 0. Launch, `AgentProcess` auto-restart, and MindServer start and `forceRestart` all go through `beginProcess`, which refuses `dead`.
+- The Mineflayer session is ended. The mind is not told to continue the objective.
 - No system observation is injected into other agents saying that this person died.
-- Another inhabitant can record a death episode only through their own perception or through conversation that itself came from someone who had an episode.
-- A later disconnect of a living inhabitant still uses the absent state and the existing restart-is-not-a-goal rule.
+- Another inhabitant records a death only through `recordDeathKnowledge`: `witness` and `discovery` are `observed`, and `told` names the speaker. Those writes touch only the listener's directory.
+- A crash, kick, network drop, server shutdown, or operator stop of a living inhabitant stays `absent`.
+- Offline mode identifies a Minecraft user by username. The supervisor will not start a dead life, and the placement datapack will not treat a new login as a new admission of that mind. Another client can still connect with the same offline username. That is not cryptographic identity. Human players join under their own names.
+
+**Remains.** Dropped items can despawn, and the inhabitant is not an operator, so the agent does not run `/summon`. `planRemains` records a named armor stand (`village_remains`, custom name is the Minecraft username, no cause and no coordinates on the entity) when the block at the death position is loaded and is not lava, void (`y < -64`), a chest, a barrel, a bed, a crafting table, or a furnace. Water and air are acceptable sites. An unloaded chunk is `unplaced` with reason `unloaded` rather than a guessed marker. The same plan id is not replaced by a later call. `scripts/village/place-remains.js` is the operator command that can summon the stand. It refuses the survival container and data directory, and it refuses Village Alpha unless `--allow-village-alpha` is passed. It was not run in this milestone. A nearby inhabitant records a discovery only when an entity in hearing range carries both the tag and a readable custom name. An unnamed armor stand is not evidence.
 
 **Resources.** Homes, beds, food, tools, and paths are placed before any inhabitant is started, by `node scripts/village/provision.js` against the isolated village server. The village-alpha world is the plains village from seed `village-alpha`, with chests and missing fixtures added once from `site.json` and the supply manifest. Agents are not asked to bootstrap that village with `buildPlane`. After a house has been provisioned once, chests are ordinary containers. Food can be eaten. Tools can break. Restart, death, and absence do not refill them. Vacant plots are not stocked. The plot list remains the home assignment.
 
@@ -277,16 +279,12 @@ Agreed, and already true of the gameplay stack:
 
 Collected here so implementation does not pretend they are settled.
 
-Decided, and no longer open: runtime root `runtime/scenarios/<scenario_id>/` via `agent_data_root`; CLI `--scenario`; explicit TCP ports; survival names are rejected; plots own home assignment; a later house edit is `home_mismatch` rather than a refused start; admission snapshot plus checksum; restart-based admission; dead is terminal across every start path; crash, disconnect, and operator stop are `absent`; no sleep means no dream; the dream model is configuration only until milestone 4; the day-model overlay reuses the prompter merge; the admission snapshot is persisted in milestone 1 and enters the day prompt in milestone 3; no assigned ambition still runs the autonomous loop through `VILLAGE_AUTONOMY_PREAMBLE`.
+Decided, and no longer open: runtime root `runtime/scenarios/<scenario_id>/` via `agent_data_root`; CLI `--scenario`; explicit TCP ports; survival names are rejected; plots own home assignment; a later house edit is `home_mismatch` rather than a refused start; admission snapshot plus checksum; restart-based admission; dead is terminal across every start path; crash, disconnect, and operator stop are `absent`; no sleep means no dream; the dream model is configuration only until milestone 4; the day-model overlay reuses the prompter merge; the admission snapshot is the day-prompt identity; no assigned ambition still runs the autonomous loop through `VILLAGE_AUTONOMY_PREAMBLE`, with a 15 second pause when the inhabitant chooses not to act; ordinary speech uses a 32-block default radius; a verified death exits the process after `life.json` is durable; physical evidence is an operator-placed named armor stand, not an emptied house; milestone 2 places blocks by furnishing the seed village once through `scripts/village/provision.js`.
 
-Still open. None of these are milestone 1.
+Still open.
 
-1. Permadeath body in a live server: how the Minecraft session ends. The supervisor gate is not open. Milestone 3.
-2. Audible range and death-message leakage through public chat and MindServer. Milestone 3.
-3. Physical death evidence (item drops, a marker, an empty bed) and who is close enough to observe it. Milestone 3. The house is not that evidence by being emptied; emptying is forbidden.
-4. How milestone 2 places blocks (operator-built save, structure files, or a one-shot operator tool). Coordinates in `village.json` are the contract either way. Agents never receive that tool.
-5. Dream output JSON in detail, the timeout, and the exact error string when `qwen3:14b` is missing. The queue, deduplication, checksum check, and "keep yesterday's brief" rule are decided. Milestone 4.
-6. Semantic retrieval of old episodes versus pins only.
-7. Whether temperament later gains a small code-owned preference record. Milestone 7. Until then, prose facts and a stance line.
-8. Whether any container is designated public. Private chests are ordinary containers the owner can open; taking from one needs no special theft system if the game already allows the open. Which containers are private is the plot's chest, decided. Extra shared chests are optional scenario content.
-9. Dashboard inside MindServer versus a read-only addition. Preference: extend MindServer. Milestone 5.
+1. Dream output JSON in detail, the timeout, and the exact error string when `qwen3:14b` is missing. The queue, deduplication, checksum check, and "keep yesterday's brief" rule are decided. Milestone 4.
+2. Semantic retrieval of old episodes. Milestone 3 selects pinned episodes and a small recent or name-matched slice. It does not embed or search the archive.
+3. Whether temperament later gains a small code-owned preference record. Milestone 7. Until then, prose facts and a stance line.
+4. Whether any container is designated public. Private chests are ordinary containers the owner can open; taking from one needs no special theft system if the game already allows the open. Which containers are private is the plot's chest, decided. Extra shared chests are optional scenario content.
+5. Dashboard inside MindServer versus a read-only addition. Preference: extend MindServer. Milestone 5.
