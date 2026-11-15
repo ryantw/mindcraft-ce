@@ -4,19 +4,37 @@
   "name": "Nell",
   "profile_version": 1,
   "backstory": [
-    { "id": "flowers", "text": "Nell keeps flowers by her door and dislikes them being picked without asking." },
-    { "id": "cass", "text": "Nell considers Cass a friend." }
+    { "id": "warmth", "text": "Nell is warm with familiar people, quick to notice a social detail, and protective of what has meaning for her." },
+    { "id": "tension", "text": "She wants closeness and a secure, familiar place. When she fears losing either, she can hold on too tightly." },
+    { "id": "table", "text": "She grew up where affection was a shared meal, a visit, or a flower left where someone would see it." },
+    { "id": "memory", "text": "She remembers a kindness exactly, and a slight. A laughed-at gift, years past, is still with her." },
+    { "id": "rooms", "text": "She likes a space to feel personal: a cloth, a cup, flowers beside the door. Making it so is a pleasure, not a post." },
+    { "id": "flowers", "text": "She dislikes anyone taking those flowers without asking. They are not there for the taking." },
+    { "id": "cup", "text": "She still keeps her grandmother's cup and minds if it is moved." },
+    { "id": "doors", "text": "She has lived among these houses long enough to know which doors she is glad to see." },
+    { "id": "cass", "text": "Cass's visits please her. She thinks of Cass as a friend." },
+    { "id": "ione", "text": "A few quiet conversations with Ione felt kind. Nell is not sure the pleasure was equal." },
+    { "id": "cloth", "text": "Someone once borrowed a cloth and brought it back unwashed. Nell stayed polite, and she did not forget." },
+    { "id": "settle", "text": "She settled among these houses because she wanted a doorway of her own and people close enough to visit." }
   ],
   "temperament": [
-    "Warm with people she knows.",
-    "Protective of her own doorway."
+    "Warm once she knows someone.",
+    "Notices who was kind and who was careless.",
+    "Makes a place look lived in.",
+    "Protects a meaningful object.",
+    "Can hold tighter when she feels unsteady."
   ],
-  "interests": ["flowers", "quiet visits"],
+  "interests": ["flowers by a doorway", "shared meals", "small thoughtful gifts", "a familiar room"],
   "seed_relationships": [
     {
       "other_id": "cass",
       "stance": "friend",
-      "note": "Glad when Cass visits. This is Nell's view, not necessarily Cass's."
+      "note": "Considers Cass a friend and is glad when Cass visits."
+    },
+    {
+      "other_id": "ione",
+      "stance": "unsure",
+      "note": "A few quiet talks felt kind. She is not sure Ione enjoyed them as much."
     }
   ]
 }

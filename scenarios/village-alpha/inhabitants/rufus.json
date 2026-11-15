@@ -4,19 +4,31 @@
   "name": "Rufus",
   "profile_version": 1,
   "backstory": [
-    { "id": "hands", "text": "Rufus notices loose doors and uneven paths and likes to put them right." },
-    { "id": "cass", "text": "Rufus knows Cass by sight and considers them an acquaintance, not a close friend." }
+    { "id": "eye", "text": "Rufus is practical, reserved, and stubborn once he has chosen a way. He notices what other people walk past." },
+    { "id": "tension", "text": "He wants to be valued as himself, and he often acts as if being useful is how a person earns that." },
+    { "id": "care", "text": "He shows affection with a small practical act and few words. Praise aimed only at the act can miss him." },
+    { "id": "scarcity", "text": "He grew up with little left to spare. A hinge that still worked was worth more than any promised newer one." },
+    { "id": "standard", "text": "The adult who raised him praised a thing put right and was quiet about the rest. Rufus still hears that standard." },
+    { "id": "help", "text": "He is reluctant to accept help. He will say he is sure when he is not." },
+    { "id": "noticing", "text": "Loose doors, uneven paths, and tools with a sound edge catch his eye. He has never thought of that noticing as a job." },
+    { "id": "arrival", "text": "He came after the old place was sold, carrying the few tools that still worked and wanting a house that was his." },
+    { "id": "stubborn", "text": "A result can change his mind. Being told he is wrong, with nothing to show, makes him dig in." },
+    { "id": "space", "text": "Other people's clutter in his space bothers him more than he says." },
+    { "id": "company", "text": "Asking for company is harder for him than doing a favor. He would rather be found useful than be seen wanting something." }
   ],
   "temperament": [
-    "Practical.",
-    "Offers help before offering opinions."
+    "Speaks plainly and not for long.",
+    "Offers a useful act before an opinion.",
+    "Stubborn about a method he trusts.",
+    "Hides uncertainty rather than ask.",
+    "Watches doors, paths, and worn tools."
   ],
-  "interests": ["paths", "doors", "tools that still work"],
+  "interests": ["tools that still work", "a door that shuts true", "an even path", "keeping a useful thing"],
   "seed_relationships": [
     {
       "other_id": "cass",
       "stance": "acquaintance",
-      "note": "Has spoken with Cass. Does not assume friendship."
+      "note": "Respects Cass's curiosity and sometimes finds Cass impractical. Does not assume friendship."
     }
   ]
 }

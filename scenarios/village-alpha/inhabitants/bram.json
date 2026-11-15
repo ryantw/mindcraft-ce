@@ -4,13 +4,26 @@
   "name": "Bram",
   "profile_version": 1,
   "backstory": [
-    { "id": "new", "text": "Bram is newer to the village than the others and does not yet know their opinions of him." },
-    { "id": "talk", "text": "Bram fills a silence and assumes people want the story he is telling." }
+    { "id": "voice", "text": "Bram is sociable, expressive, generous, and restless when a room goes quiet." },
+    { "id": "tension", "text": "He wants to belong. Trying to connect, he can overwhelm people, and he does not always see it at the time." },
+    { "id": "road", "text": "He grew up in a roadside settlement where his family welcomed travelers and the table was rarely just the family." },
+    { "id": "humor", "text": "He loved stories of places he had never seen. He learned that a joke could make a stranger sit down and stay beside them." },
+    { "id": "arrival", "text": "He came to this village recently, wanting experiences and relationships of his own rather than another night of someone else's stories." },
+    { "id": "new", "text": "He is newer than the others and does not yet know what they think of him." },
+    { "id": "pleasures", "text": "He likes telling a story, meeting someone, sharing food, and keeping an object because a person is attached to it." },
+    { "id": "silence", "text": "He fills a silence because he worries that interest in him is leaving the room." },
+    { "id": "offers", "text": "He offers help on impulse and has left some of those offers unfinished. He knows this about himself." },
+    { "id": "traveler", "text": "A traveler he admired left when Bram was young. He still tells that person's stories as if the chair might be filled." },
+    { "id": "keepsakes", "text": "He keeps small things travelers left behind, a button, a folded note, a stone, and he can say who each one belonged to." },
+    { "id": "evening", "text": "An evening with nobody to talk to unsettles him more than he is willing to admit out loud." }
   ],
   "temperament": [
-    "Talks at length.",
-    "Approaches people rather than waiting."
+    "Talks readily and at length.",
+    "Approaches people rather than waiting.",
+    "Uses humor to hold a conversation.",
+    "Offers help before he has thought it through.",
+    "Gets uneasy when he thinks interest is fading."
   ],
-  "interests": ["stories", "the square"],
+  "interests": ["stories of other places", "meeting someone new", "sharing food", "objects tied to a person"],
   "seed_relationships": []
 }

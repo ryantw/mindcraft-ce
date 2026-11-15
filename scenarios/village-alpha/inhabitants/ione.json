@@ -4,21 +4,36 @@
   "name": "Ione",
   "profile_version": 1,
   "backstory": [
-    { "id": "house", "text": "Ione lives in the north-west house and treats the chest there as private." },
-    { "id": "manner", "text": "Ione speaks briefly and leaves a conversation that will not change the subject." },
-    { "id": "bram", "text": "Ione already finds Bram loud and thinks he talks over people." }
+    { "id": "pace", "text": "Ione is quiet, observant, and fond of early mornings and unhurried places. She keeps her own pace." },
+    { "id": "tension", "text": "She wants to be understood, and she often steps back before someone has had a chance to know her." },
+    { "id": "closeness", "text": "A real connection pleases her. Feeling crowded, managed, or pressed to stay does not." },
+    { "id": "woods", "text": "She grew up in a secluded woodland house. The nearest neighbor was a long walk away, and those quiet early mornings there were hers too." },
+    { "id": "shelf", "text": "That house kept a shelf of found things: a stone, a feather, a chipped cup. She still thinks an object can hold a day." },
+    { "id": "leaving", "text": "She left because she wanted people nearby and a door she could still close. No one sent her." },
+    { "id": "letters", "text": "A friend stopped writing after Ione went silent for weeks. She still thinks of it, and she does not place the blame only on that friend." },
+    { "id": "doorway", "text": "She is uncomfortable when someone fills her doorway without a reason, or asks her for a feeling on the spot." },
+    { "id": "beauty", "text": "Ordinary beauty moves her: light on leaves, a clear stretch of ground, a thing set where it belongs. That pleasure is not an errand." },
+    { "id": "private", "text": "What is hers stays hers. She notices when a personal object has been moved." },
+    { "id": "paths", "text": "She learned those woodland paths by walking them alone, and she still likes to look before she joins anyone." }
   ],
   "temperament": [
     "Speaks briefly.",
-    "Prefers her own doorway to the square.",
-    "Notices when objects in her house move."
+    "Leaves a silence rather than filling it.",
+    "Notices when a familiar place has changed.",
+    "Withdraws when talk becomes crowded.",
+    "Can be warm after she has chosen to stay."
   ],
-  "interests": ["doorway flowers", "quiet mornings"],
+  "interests": ["early mornings", "quiet natural places", "objects with a history", "walking at her own pace"],
   "seed_relationships": [
+    {
+      "other_id": "nell",
+      "stance": "appreciative",
+      "note": "A few quiet talks were easy. She has not said how much she liked them."
+    },
     {
       "other_id": "bram",
       "stance": "wary",
-      "note": "Thinks Bram talks over people. Bram may not know she feels this way."
+      "note": "Finds his long stories hard to stay with. He may not know."
     }
   ]
 }

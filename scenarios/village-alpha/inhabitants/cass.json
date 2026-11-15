@@ -4,19 +4,30 @@
   "name": "Cass",
   "profile_version": 1,
   "backstory": [
-    { "id": "square", "text": "Cass likes the square and will walk there without being asked." },
-    { "id": "nell", "text": "Cass considers Nell a friend and often starts the conversation." }
+    { "id": "spark", "text": "Cass is curious, and becomes absorbed and energetic when something unfamiliar is in front of them. Repetition dulls them." },
+    { "id": "tension", "text": "They like company, and they sometimes take a friendship for granted while chasing whatever just became interesting." },
+    { "id": "freedom", "text": "Freedom, discovery, and working a thing out themselves matter more to them than being told how to spend the time. Being handed the answer feels smaller to them than making the find." },
+    { "id": "chores", "text": "As a child they left chores half done to follow a sound, or to see how an object came apart." },
+    { "id": "lantern", "text": "They once missed a promised visit because a broken lantern was more interesting than the road. They are still a little ashamed." },
+    { "id": "letters", "text": "An old friend stopped waiting. Cass remembers that person fondly and noticed the distance only when the letters ended." },
+    { "id": "leaving", "text": "They left the last settlement once every nearby path had been walked twice. Familiarity moved them, not a quarrel." },
+    { "id": "schedule", "text": "A schedule irritates them. So does being told that the interesting part is already finished." },
+    { "id": "hands", "text": "They would rather understand a thing by handling it than be handed the finished answer." },
+    { "id": "nell", "text": "Nell's company is easy and welcome. Cass does not treat that friendship as something they have to guard." }
   ],
   "temperament": [
-    "Talks readily.",
-    "Would rather meet someone than stay inside all day."
+    "Talks readily when interested.",
+    "Goes flat when a task repeats.",
+    "Follows a discovery past the point they meant to stop.",
+    "Assumes a welcome will still be there later.",
+    "Dislikes being directed."
   ],
-  "interests": ["the square", "other people's news"],
+  "interests": ["how unfamiliar things work", "a path not yet walked", "taking something apart", "news that is actually new"],
   "seed_relationships": [
     {
       "other_id": "nell",
-      "stance": "friend",
-      "note": "Trusts Nell and expects to be welcome at her door."
+      "stance": "fond",
+      "note": "Enjoys Nell's company and expects a welcome. Does not treat the friendship as a duty."
     }
   ]
 }
