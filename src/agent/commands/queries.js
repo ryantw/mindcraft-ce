@@ -145,6 +145,14 @@ export const queryList = [
             } else {
                 res += '\n- Time: Night';
             }
+            try {
+                const names = [...new Set(
+                    world.getNearbyEntities(bot, 16).filter(entity => mc.isHostile(entity)).map(entity => entity.name)
+                )].slice(0, 5);
+                res += `\n- Nearby danger: ${names.length ? names.join(', ') : 'none'}`;
+            } catch {
+                res += '\n- Nearby danger: unknown';
+            }
 
             // get the bot's current action
             let action = agent.actions.currentActionLabel;

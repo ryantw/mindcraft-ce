@@ -1,7 +1,7 @@
 import settings from './settings.js';
 import { containsCommand, stripUnsharedCommands } from './commands/index.js';
 import { sendBotChatToServer } from './mindserver_proxy.js';
-import { acceptInWorldSpeech, claimSpeech, DEFAULT_HEARING_BLOCKS, speakerDistance } from '../village/locality.js';
+import { acceptInWorldSpeech, claimSpeech, DEFAULT_HEARING_BLOCKS, isDelayedMirror, rememberInWorldSpeech, speakerDistance } from '../village/locality.js';
 
 let agent;
 let agent_names = [];
@@ -317,6 +317,11 @@ class ConversationManager {
                 return;
             }
             if (!claimSpeech(sender, received?.message)) return;
+            if (isDelayedMirror(sender, received?.message)) {
+                console.log(`[${agent.name}] Already heard ${sender} nearby. Not answering that sentence again.`);
+                return;
+            }
+            rememberInWorldSpeech(sender, received?.message);
         }
         const convo = this._getConvo(sender);
 

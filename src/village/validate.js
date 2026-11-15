@@ -232,8 +232,11 @@ export function validateScenario(bundle, { reservedNames = [], knownRuntimeIds =
         if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$/.test(scenario.settings.remains_container)) {
             fail('scenario.settings.remains_container must be a container name.');
         }
-        if (scenario.settings.remains_container === 'ai-village' || scenario.settings.remains_container === 'village-alpha') {
-            fail('scenario.settings.remains_container cannot name the survival server or Village Alpha.');
+        if (scenario.settings.remains_container === 'ai-village') {
+            fail('scenario.settings.remains_container cannot name the survival server.');
+        }
+        if (scenario.settings.remains_container === 'village-alpha' && scenario.id !== 'village-alpha') {
+            fail('scenario.settings.remains_container cannot name Village Alpha from another scenario.');
         }
     }
 

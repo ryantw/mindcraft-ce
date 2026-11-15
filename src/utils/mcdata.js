@@ -194,9 +194,43 @@ export function isHuntable(mob) {
     return animals.includes(mob.name.toLowerCase()) && !mob.metadata[16]; // metadata 16 is not baby
 }
 
+/** Calm members of these species are not enemies. An angry enderman is. */
+const NEUTRAL_MOBS = new Set([
+    'enderman', 'wolf', 'bee', 'polar_bear', 'piglin', 'zombified_piglin',
+    'llama', 'trader_llama', 'goat', 'panda', 'fox', 'dolphin',
+    'iron_golem', 'snow_golem',
+]);
+
+function metadataValue(entity, index) {
+    const entry = entity?.metadata?.[index];
+    if (entry == null) return undefined;
+    return typeof entry === 'object' && 'value' in entry ? entry.value : entry;
+}
+
+/** 1.21 enderman metadata 17 is the screaming flag. Staring is not enough. */
+export function isEndermanAngry(entity) {
+    if (entity?.name !== 'enderman') return false;
+    const screaming = metadataValue(entity, 17);
+    return screaming === true || screaming === 1;
+}
+
+export function isNeutralMob(mob) {
+    return NEUTRAL_MOBS.has(mob?.name);
+}
+
+/**
+ * A creature that should be fled from. A calm enderman is not hostile.
+ * Minecraft-data labels endermen hostile; that label alone used to start a fight.
+ */
 export function isHostile(mob) {
     if (!mob || !mob.name) return false;
-    return  (mob.type === 'mob' || mob.type === 'hostile') && mob.name !== 'iron_golem' && mob.name !== 'snow_golem';
+    if (isNeutralMob(mob)) return isEndermanAngry(mob);
+    return (mob.type === 'mob' || mob.type === 'hostile');
+}
+
+/** A creature self-defense may attack. Provoked neutrals are fled from instead. */
+export function isCombatTarget(mob) {
+    return isHostile(mob) && !isNeutralMob(mob);
 }
 
 // blocks that don't work with collectBlock, need to be manually collected

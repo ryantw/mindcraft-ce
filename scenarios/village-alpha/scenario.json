@@ -49,6 +49,7 @@
     "allow_insecure_coding": false,
     "load_memory": true,
     "permanent_death": true,
-    "hearing_blocks": 32
+    "hearing_blocks": 32,
+    "remains_container": "village-alpha"
   }
 }

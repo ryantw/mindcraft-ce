@@ -28,7 +28,16 @@ export function acceptInWorldSpeech({ village = false, distance = null, range = 
 }
 
 const recentSpeech = new Map();
+const inWorldSpeech = new Map();
 const SPEECH_DEDUPE_MS = 3000;
+/** A MindServer copy can arrive long after the in-world chat of the same sentence. */
+const MIRROR_WINDOW_MS = 60000;
+
+function speechKey(speaker, message) {
+    const body = comparableSpeech(message);
+    if (!speaker || !body) return '';
+    return `${String(speaker).toLowerCase()}|${body}`;
+}
 
 /** Public mirrors prefix the same sentence. Both copies are one utterance. */
 export function comparableSpeech(message) {
@@ -45,9 +54,8 @@ export function comparableSpeech(message) {
  * A later MindServer copy or public chat copy of that same sentence does not.
  */
 export function claimSpeech(speaker, message, now = Date.now()) {
-    const body = comparableSpeech(message);
-    if (!speaker || !body) return false;
-    const key = `${String(speaker).toLowerCase()}|${body}`;
+    const key = speechKey(speaker, message);
+    if (!key) return false;
     const previous = recentSpeech.get(key);
     recentSpeech.set(key, now);
     if (recentSpeech.size > 200) {
@@ -58,6 +66,21 @@ export function claimSpeech(speaker, message, now = Date.now()) {
     return previous == null || now - previous >= SPEECH_DEDUPE_MS;
 }
 
+/** The in-world chat of a sentence. A later directed copy is the same utterance. */
+export function rememberInWorldSpeech(speaker, message, now = Date.now()) {
+    const key = speechKey(speaker, message);
+    if (!key) return;
+    inWorldSpeech.set(key, now);
+}
+
+export function isDelayedMirror(speaker, message, now = Date.now(), windowMs = MIRROR_WINDOW_MS) {
+    const key = speechKey(speaker, message);
+    if (!key) return false;
+    const at = inWorldSpeech.get(key);
+    return at != null && now - at < windowMs && now >= at;
+}
+
 export function resetSpeechClaims() {
     recentSpeech.clear();
+    inWorldSpeech.clear();
 }

@@ -489,7 +489,7 @@ test('remains plans are idempotent and refuse unsafe sites and protected worlds'
     assert.equal(planRemains({ position: { x: 0, y: -80, z: 0 }, site: { block: 'air' } }).reason, 'void');
     assert.equal(planRemains({ position: { x: 0, y: 64, z: 0 }, site: { block: 'chest' } }).reason, 'would overwrite belongings or a fixture');
     assert.equal(planRemains({ position: { x: 0, y: 64, z: 0 }, site: { block: 'water' } }).status, 'planned');
-    assert.equal(planRemains({ position: { x: 0, y: 64, z: 0 }, site: null }).reason, 'unloaded');
+    assert.equal(planRemains({ position: { x: 0, y: 64, z: 0 }, site: null }).reason, 'not_attempted');
     assert.equal(readableRemains({ name: 'armor_stand', metadata: [{}, {}, { value: '{"text":"Ada"}' }], id: 4 }).label, 'Ada');
     assert.equal(readableRemains({ name: 'armor_stand', customName: 'Ada', id: 5 }).label, 'Ada');
     assert.equal(readableRemains({ name: 'armor_stand', tags: ['village_remains'] }), null);

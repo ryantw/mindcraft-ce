@@ -8,6 +8,8 @@ import path from 'path';
 
 export const SHARED_GAMEPLAY_LINE = 'Shared actions, commands, and survival rules are the same for every inhabitant. Identity changes what you choose and what you say. It does not add a job, a script, or a different command set.';
 
+export const SHARED_WORLD_LINE = 'Darkness and night are dangerous outdoors. A house can shelter you, and a bed can be slept in when you choose and the game allows it. Do not attack a calm neutral creature such as an enderman, wolf, bee, or piglin. Retreating, eating, and seeking shelter are valid, and immediate danger outranks a personal intention. Sleep is a choice, not a schedule. Armor and a weapon left in a chest protect no one; wear what you are carrying. Stay on dry land. Water is not a path, and getting out of it comes before fighting.';
+
 const CONTEXT_FILES = ['identity.json', 'knowledge.json', 'relationships.json', 'episodes.json', 'morning.json', 'intentions.json'];
 
 function readJson(file) {
@@ -49,6 +51,7 @@ export function renderVillageContext(dataRoot, { intention = '', liveChest = und
     const lines = [
         'PRIVATE IDENTITY',
         SHARED_GAMEPLAY_LINE,
+        SHARED_WORLD_LINE,
         'Live game state and verified lessons override this memory. Something another person said is a claim, not something you witnessed. Your own interpretations are not established facts.',
         `You are ${identity.name}. ${clip(identity.backstory, 420)}`,
         `Temperament: ${clip(identity.temperament, 220)}`,
@@ -62,7 +65,12 @@ export function renderVillageContext(dataRoot, { intention = '', liveChest = und
     const current = personal || String(intention || '').trim();
     if (current && current !== VILLAGE_AUTONOMY_PREAMBLE) {
         lines.push(`Current intention: ${clip(current, 180)}`);
-        if (personal) lines.push('That intention is optional. You may pursue it, revise it, finish it, or leave it.');
+        if (personal) {
+            lines.push('That intention is optional. You may pursue it, revise it, finish it, or leave it. Saying it aloud is not progress.');
+            if (personalStore?.active?.progress) {
+                lines.push(`Verified progress: ${clip(personalStore.active.progress, 160)}`);
+            }
+        }
     }
     const morningFile = path.join(dataRoot, 'morning.json');
     if (existsSync(morningFile)) {

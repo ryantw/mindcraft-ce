@@ -101,6 +101,26 @@ export function updateIntention(dataRoot, { action, text = '', source = 'day', s
     return { ok: true, intentions: store };
 }
 
+/**
+ * A verified action can note progress. It does not complete the intention.
+ * Speech is not passed here.
+ */
+export function noteVerifiedProgress(dataRoot, text, now = () => new Date().toISOString()) {
+    const store = readIntentions(dataRoot);
+    const prior = store.active;
+    if (!prior || (prior.status !== 'active' && prior.status !== 'pursuing')) {
+        return { ok: false, reason: 'no intention' };
+    }
+    const words = clip(text, 160);
+    if (!words) return { ok: false, reason: 'empty' };
+    if (prior.progress === words) return { ok: true, unchanged: true, intentions: store };
+    const at = now();
+    store.active = { ...prior, status: 'pursuing', progress: words, updated_at: at };
+    store.waking_decision_at = at;
+    writeAtomic(fileOf(dataRoot), store);
+    return { ok: true, intentions: store };
+}
+
 export function activeIntentionText(store) {
     const active = store?.active;
     if (!active) return '';

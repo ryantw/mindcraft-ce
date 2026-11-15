@@ -3,6 +3,19 @@ import * as world from "./world.js";
 import pf from 'mineflayer-pathfinder';
 import Vec3 from 'vec3';
 import settings from "../../../settings.js";
+import agentSettings from '../settings.js';
+import {
+    combatWaitsForLand,
+    configureDryLand,
+    configureSwimEscape,
+    isBankStand,
+    navigationMode,
+    readWaterState,
+    selectExit,
+    shortlistExits,
+    shouldAbandonExit,
+    shouldEscapeWater,
+} from '../../village/water.js';
 import { formatIngredients, formatRecipeAlternatives } from '../../utils/crafting.js';
 import { canStoreCollectionTarget, collectionExpectedItems } from '../action_outcome.js';
 
@@ -107,6 +120,15 @@ async function autoLight(bot) {
         } catch (err) {return false;}
     }
     return false;
+}
+
+async function equipCombatGear(bot) {
+    try {
+        await bot.armorManager?.equipAll();
+    } catch (error) {
+        log(bot, `Could not equip armor: ${error.message}`);
+    }
+    await equipHighestAttack(bot);
 }
 
 async function equipHighestAttack(bot) {
@@ -485,6 +507,10 @@ export async function attackNearest(bot, mobType, kill=true) {
      * @example
      * await skills.attackNearest(bot, "zombie", true);
      **/
+    if (combatWaitsForLand(readWaterState(bot))) {
+        log(bot, 'Leaving the water comes before fighting.');
+        return false;
+    }
     bot.modes.pause('cowardice');
     if (mobType === 'drowned' || mobType === 'cod' || mobType === 'salmon' || mobType === 'tropical_fish' || mobType === 'squid')
         bot.modes.pause('self_preservation'); // so it can go underwater. TODO: have an drowning mode so we don't turn off all self_preservation
@@ -506,8 +532,12 @@ export async function attackEntity(bot, entity, kill=true) {
      * await skills.attackEntity(bot, entity);
      **/
 
+    if (combatWaitsForLand(readWaterState(bot))) {
+        log(bot, 'Leaving the water comes before fighting.');
+        return false;
+    }
     let pos = entity.position;
-    await equipHighestAttack(bot)
+    await equipCombatGear(bot)
 
     if (!kill) {
         if (bot.entity.position.distanceTo(pos) > 5) {
@@ -541,21 +571,32 @@ export async function defendSelf(bot, range=9) {
      * @example
      * await skills.defendSelf(bot);
      * **/
+    if (combatWaitsForLand(readWaterState(bot))) {
+        bot.pvp?.stop();
+        log(bot, 'Leaving the water comes before fighting.');
+        return false;
+    }
     bot.modes.pause('self_defense');
     bot.modes.pause('cowardice');
     let attacked = false;
-    let enemy = world.getNearestEntityWhere(bot, entity => mc.isHostile(entity), range);
-    while (enemy) {
-        await equipHighestAttack(bot);
+    await equipCombatGear(bot);
+    let enemy = world.getNearestEntityWhere(bot, entity => mc.isCombatTarget(entity), range);
+    while (enemy && (bot.health ?? 20) > 10) {
+        if (combatWaitsForLand(readWaterState(bot))) {
+            bot.pvp?.stop();
+            log(bot, 'Leaving the water comes before fighting.');
+            return false;
+        }
+        await equipCombatGear(bot);
         if (bot.entity.position.distanceTo(enemy.position) >= 4 && enemy.name !== 'creeper' && enemy.name !== 'phantom') {
             try {
-                bot.pathfinder.setMovements(new pf.Movements(bot));
+                bot.pathfinder.setMovements(combatMovements(bot));
                 await bot.pathfinder.goto(new pf.goals.GoalFollow(enemy, 3.5), true);
             } catch (err) {/* might error if entity dies, ignore */}
         }
         if (bot.entity.position.distanceTo(enemy.position) <= 2) {
             try {
-                bot.pathfinder.setMovements(new pf.Movements(bot));
+                bot.pathfinder.setMovements(combatMovements(bot));
                 let inverted_goal = new pf.goals.GoalInvert(new pf.goals.GoalFollow(enemy, 2));
                 await bot.pathfinder.goto(inverted_goal, true);
             } catch (err) {/* might error if entity dies, ignore */}
@@ -563,7 +604,7 @@ export async function defendSelf(bot, range=9) {
         bot.pvp.attack(enemy);
         attacked = true;
         await new Promise(resolve => setTimeout(resolve, 500));
-        enemy = world.getNearestEntityWhere(bot, entity => mc.isHostile(entity), range);
+        enemy = world.getNearestEntityWhere(bot, entity => mc.isCombatTarget(entity), range);
         if (bot.interrupt_code) {
             bot.pvp.stop();
             return false;
@@ -1444,12 +1485,36 @@ export async function giveToPlayer(bot, itemType, username, num=1) {
     return false;
 }
 
+function combatMovements(bot) {
+    const movements = new pf.Movements(bot);
+    if (navigationMode({
+        village: agentSettings.village_autonomy === true,
+        inWater: readWaterState(bot).inWater,
+        aquatic: bot.aquaticActivity === true,
+    }) === 'dry') {
+        configureDryLand(movements);
+    }
+    return movements;
+}
+
 export async function goToGoal(bot, goal) {
     /**
      * Navigate to the given goal. Use doors and attempt minimally destructive movements.
+     * Village travel refuses a route that has to enter water.
      * @param {MinecraftBot} bot, reference to the minecraft bot.
      * @param {pf.goals.Goal} goal, the goal to navigate to.
      **/
+
+    const water = readWaterState(bot);
+    const mode = navigationMode({
+        village: agentSettings.village_autonomy === true,
+        inWater: water.inWater,
+        aquatic: bot.aquaticActivity === true,
+    });
+    if (mode === 'escape') {
+        log(bot, 'You are in water. Get onto dry land before traveling farther.');
+        return false;
+    }
 
     const nonDestructiveMovements = new pf.Movements(bot);
     const dontBreakBlocks = ['glass', 'glass_pane'];
@@ -1460,19 +1525,32 @@ export async function goToGoal(bot, goal) {
     nonDestructiveMovements.digCost = 10;
 
     const destructiveMovements = new pf.Movements(bot);
+    if (mode === 'dry') {
+        configureDryLand(nonDestructiveMovements);
+        configureDryLand(destructiveMovements);
+    }
 
     let final_movements = destructiveMovements;
 
     const pathfind_timeout = 1000;
-    if (await bot.pathfinder.getPathTo(nonDestructiveMovements, goal, pathfind_timeout).status === 'success') {
+    const gentle = await bot.pathfinder.getPathTo(nonDestructiveMovements, goal, pathfind_timeout);
+    if (gentle.status === 'success') {
         final_movements = nonDestructiveMovements;
         log(bot, `Found non-destructive path.`);
     }
-    else if (await bot.pathfinder.getPathTo(destructiveMovements, goal, pathfind_timeout).status === 'success') {
-        log(bot, `Found destructive path.`);
-    }
     else {
-        log(bot, `Path not found, but attempting to navigate anyway using destructive movements.`);
+        const forced = await bot.pathfinder.getPathTo(destructiveMovements, goal, pathfind_timeout);
+        if (forced.status === 'success') {
+            log(bot, `Found destructive path.`);
+        }
+        else if (mode === 'dry' && gentle.status === 'noPath' && forced.status === 'noPath') {
+            const error = new Error('Could not reach the destination without entering water.');
+            error.code = 'water_required';
+            throw error;
+        }
+        else {
+            log(bot, `Path not found, but attempting to navigate anyway using destructive movements.`);
+        }
     }
 
     const doorCheckInterval = startDoorInterval(bot);
@@ -1605,10 +1683,103 @@ export async function goToPosition(bot, x, y, z, min_distance=2) {
             return false;
         }
     } catch (err) {
-        log(bot, `Pathfinding stopped: ${err.message}.`);
         clearInterval(progressInterval);
+        if (err?.code === 'water_required') {
+            bot.waterTravelFailure = { message: err.message, x, y, z };
+            log(bot, err.message);
+        }
+        else {
+            log(bot, `Pathfinding stopped: ${err.message}.`);
+        }
         return false;
     }
+}
+
+const WATER_ESCAPE_ATTEMPTS = 3;
+const WATER_QUERY_LIMIT = 8;
+
+function waterStands(bot, origin, radius) {
+    const stands = [];
+    const feetY = Math.floor(origin.y);
+    for (let dx = -radius; dx <= radius; dx++) {
+        for (let dz = -radius; dz <= radius; dz++) {
+            if (dx === 0 && dz === 0) continue;
+            for (let dy = -2; dy <= 3; dy++) {
+                const x = Math.floor(origin.x) + dx;
+                const y = feetY + dy;
+                const z = Math.floor(origin.z) + dz;
+                const feet = bot.blockAt(new Vec3(x, y, z));
+                const head = bot.blockAt(new Vec3(x, y + 1, z));
+                const below = bot.blockAt(new Vec3(x, y - 1, z));
+                if (!isBankStand(feet?.name, head?.name, below?.name)) continue;
+                const distance = Math.hypot(dx, dz);
+                stands.push({ x, y, z, distance, climb: dy });
+            }
+        }
+    }
+    return stands;
+}
+
+/**
+ * Leave accidental water for a bank the pathfinder can reach. Swimming is
+ * allowed here. Digging, bridging, and teleporting are not.
+ */
+export async function escapeWater(bot, memory = {}) {
+    bot.output = bot.output || '';
+    const rejected = memory.rejected instanceof Set ? memory.rejected : new Set();
+    memory.rejected = rejected;
+    if (!shouldEscapeWater(readWaterState(bot))) return { escaped: true, rejected };
+    const surface = () => {
+        if (readWaterState(bot).submerged) bot.setControlState?.('jump', true);
+        else bot.setControlState?.('jump', false);
+    };
+    surface();
+    bot.pvp?.stop();
+    const movements = configureSwimEscape(new pf.Movements(bot));
+    let tried = 0;
+    while (tried < WATER_ESCAPE_ATTEMPTS && shouldEscapeWater(readWaterState(bot))) {
+        const origin = bot.entity.position;
+        const listed = shortlistExits(waterStands(bot, origin, 10))
+            .filter(candidate => !rejected.has(`${candidate.x},${candidate.y},${candidate.z}`));
+        const queried = [];
+        let queries = 0;
+        for (const candidate of listed) {
+            if (queries >= WATER_QUERY_LIMIT) break;
+            queries++;
+            const goal = new pf.goals.GoalNear(candidate.x + 0.5, candidate.y, candidate.z + 0.5, 0.6);
+            let reachable = false;
+            let cost = Infinity;
+            try {
+                const path = await bot.pathfinder.getPathTo(movements, goal, 800);
+                reachable = path.status === 'success';
+                cost = reachable ? (path.path?.length || candidate.distance) : Infinity;
+            } catch {
+                reachable = false;
+            }
+            if (!reachable) rejected.add(`${candidate.x},${candidate.y},${candidate.z}`);
+            queried.push({ ...candidate, reachable, cost });
+        }
+        const chosen = selectExit(queried, rejected);
+        if (!chosen) break;
+        const before = bot.entity.position.clone();
+        bot.pathfinder.setMovements(movements);
+        bot.pathfinder.setGoal(new pf.goals.GoalNear(chosen.x + 0.5, chosen.y, chosen.z + 0.5, 0.6), true);
+        const started = Date.now();
+        let moved = 0;
+        while (Date.now() - started < 6000 && shouldEscapeWater(readWaterState(bot))) {
+            surface();
+            await new Promise(resolve => setTimeout(resolve, 400));
+            moved = Math.max(moved, bot.entity.position.distanceTo(before));
+            if (bot.interrupt_code) break;
+            if (shouldAbandonExit({ moved, elapsedMs: Date.now() - started })) break;
+        }
+        bot.pathfinder.stop();
+        if (shouldEscapeWater(readWaterState(bot))) rejected.add(`${chosen.x},${chosen.y},${chosen.z}`);
+        tried++;
+        if (bot.interrupt_code) break;
+    }
+    bot.setControlState?.('jump', false);
+    return { escaped: !shouldEscapeWater(readWaterState(bot)), rejected };
 }
 
 export async function goToNearestBlock(bot, blockType,  min_distance=2, range=64) {
@@ -1720,6 +1891,11 @@ export async function followPlayer(bot, username, distance=4) {
 
     const move = new pf.Movements(bot);
     move.digCost = 10;
+    if (navigationMode({
+        village: agentSettings.village_autonomy === true,
+        inWater: readWaterState(bot).inWater,
+        aquatic: bot.aquaticActivity === true,
+    }) === 'dry') configureDryLand(move);
     bot.pathfinder.setMovements(move);
     let doorCheckInterval = startDoorInterval(bot);
 
@@ -1783,7 +1959,13 @@ export async function moveAway(bot, distance) {
     const pos = bot.entity.position;
     let goal = new pf.goals.GoalNear(pos.x, pos.y, pos.z, distance);
     let inverted_goal = new pf.goals.GoalInvert(goal);
-    bot.pathfinder.setMovements(new pf.Movements(bot));
+    const retreat = new pf.Movements(bot);
+    if (navigationMode({
+        village: agentSettings.village_autonomy === true,
+        inWater: readWaterState(bot).inWater,
+        aquatic: bot.aquaticActivity === true,
+    }) === 'dry') configureDryLand(retreat);
+    bot.pathfinder.setMovements(retreat);
 
     if (bot.modes.isOn('cheat')) {
         const move = new pf.Movements(bot);
@@ -1828,19 +2010,28 @@ export async function avoidEnemies(bot, distance=16) {
      * @example
      * await skills.avoidEnemies(bot, 8);
      **/
+    if (combatWaitsForLand(readWaterState(bot))) return false;
     bot.modes.pause('self_preservation'); // prevents damage-on-low-health from interrupting the bot
     let enemy = world.getNearestEntityWhere(bot, entity => mc.isHostile(entity), distance);
     while (enemy) {
-        const follow = new pf.goals.GoalFollow(enemy, distance+1); // move a little further away
-        const inverted_goal = new pf.goals.GoalInvert(follow);
-        bot.pathfinder.setMovements(new pf.Movements(bot));
-        bot.pathfinder.setGoal(inverted_goal, true);
+        bot.pathfinder.setMovements(combatMovements(bot));
+        if (mc.isCombatTarget(enemy)) {
+            const follow = new pf.goals.GoalFollow(enemy, distance+1); // move a little further away
+            bot.pathfinder.setGoal(new pf.goals.GoalInvert(follow), true);
+        } else {
+            // Following an enderman looks at its face and makes it angry.
+            const here = bot.entity.position;
+            const away = here.minus(enemy.position);
+            const step = away.norm() > 0.1 ? away.normalize().scaled(distance) : new Vec3(distance, 0, 0);
+            const dest = here.plus(step);
+            bot.pathfinder.setGoal(new pf.goals.GoalNear(dest.x, dest.y, dest.z, 2), true);
+        }
         await new Promise(resolve => setTimeout(resolve, 500));
         enemy = world.getNearestEntityWhere(bot, entity => mc.isHostile(entity), distance);
         if (bot.interrupt_code) {
             break;
         }
-        if (enemy && bot.entity.position.distanceTo(enemy.position) < 3) {
+        if (enemy && mc.isCombatTarget(enemy) && bot.entity.position.distanceTo(enemy.position) < 3) {
             await attackEntity(bot, enemy, false);
         }
     }

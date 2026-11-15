@@ -481,6 +481,14 @@ export function classifyFailure(message='', fallback='action_failed') {
             condition: 'state_changed',
         };
     }
+    if (/without entering water/i.test(text)) {
+        return {
+            code: 'water_blocked',
+            message: 'That place cannot be reached without entering water.',
+            prerequisites: ['Choose a destination on dry land, or a route that stays on the ground.'],
+            condition: 'unchanged_behavior',
+        };
+    }
     if (/no .* nearby|could not reach|unable to reach|no path|pathfinding stopped|repeatedly unreachable|no meaningful progress|temporarily avoiding/i.test(text)) {
         return {
             code: 'target_unavailable',

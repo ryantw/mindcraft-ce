@@ -290,7 +290,10 @@ export function formatCommandSignature(commandName) {
     if (!command) return null;
     const params = Object.entries(command.params || {});
     if (params.length === 0) return `${command.name}()`;
-    const body = params.map(([key, spec]) => `${key}:${SIGNATURE_TYPES[spec.type] || spec.type}`).join(', ');
+    const body = params.map(([key, spec]) => {
+        const type = SIGNATURE_TYPES[spec.type] || spec.type;
+        return spec.optional ? `${key}?:${type}` : `${key}:${type}`;
+    }).join(', ');
     return `${command.name}(${body})`;
 }
 
@@ -432,7 +435,7 @@ export function getCommandDocs(agent) {
         'boolean':           'bool'
     }
     let docs = `\n*COMMAND DOCS\n You can use the following commands to perform actions and get information about the world. 
-    A command that lists parameters is invalid without them. Write !placeHere("cobblestone") or !digDown(4), not !placeHere or !digDown. Bare words inside parentheses are accepted: !placeHere(cobblestone).\n
+    A command that lists parameters is invalid without them, except a parameter marked Optional. Write !placeHere("cobblestone") or !digDown(4), not !placeHere or !digDown. Bare words inside parentheses are accepted: !placeHere(cobblestone).\n
     Do not use codeblocks. Use double quotes for strings. Only use one command in each response, trailing commands and comments will be ignored.\n`;
     if (settings.village_autonomy === true) {
         docs += 'To speak to someone nearby, write ordinary words. There is no !say and no !talkTo. Command syntax is not conversation; only the words before a command are heard.\n';
@@ -457,7 +460,8 @@ export function getCommandDocs(agent) {
         if (command.params) {
             docs += 'Params:\n';
             for (let param in command.params) {
-                docs += `${param}: (${typeTranslations[command.params[param].type]??command.params[param].type}) ${command.params[param].description}\n`;
+                const optional = command.params[param].optional ? ' Optional.' : '';
+                docs += `${param}: (${typeTranslations[command.params[param].type]??command.params[param].type}) ${command.params[param].description}${optional}\n`;
             }
         }
     }

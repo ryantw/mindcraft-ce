@@ -1,5 +1,6 @@
 import { reflect } from './reasoning.js';
-import { VILLAGE_AUTONOMY_PREAMBLE, VILLAGE_DECISION_INTERVAL_MS, villageDecisionMessage } from './startup_goal.js';
+import { VILLAGE_AUTONOMY_PREAMBLE, VILLAGE_DECISION_INTERVAL_MS, villageDecisionMessage, villageSafetyNote } from './startup_goal.js';
+import { noteSpeechTurn, VILLAGE_SPEECH_RECOVERY } from '../village/turn_taking.js';
 
 const STOPPED = 0
 const ACTIVE = 1
@@ -90,18 +91,33 @@ export class SelfPrompter {
                 const planText = activePlan && activeStep
                     ? ` Your persistent objective is '${activePlan.objective}'. The current verified step is '${activeStep.description}'.`
                     : '';
-                const msg = choosing
-                    ? villageDecisionMessage()
-                    : `You are self-prompting with the broad goal: '${this.prompt}'.${planText} ` +
+                const stalled = choosing && this.agent._speechLoop?.stalled;
+                const msg = !choosing
+                    ? `You are self-prompting with the broad goal: '${this.prompt}'.${planText} ` +
                     `Retain freedom to react to safety, the environment, and social interaction, but otherwise advance the current plan. ` +
-                    `Your next response MUST contain a command with this syntax: !commandName. Respond:`;
+                    `Your next response MUST contain a command with this syntax: !commandName. Respond:`
+                    : stalled
+                        ? `${VILLAGE_SPEECH_RECOVERY} ${villageSafetyNote(this.agent.bot)}`.trim()
+                        : `${villageDecisionMessage()} ${villageSafetyNote(this.agent.bot)}`.trim();
 
-                const used_command = await this.agent.handleMessage('system', msg, -1);
+                if (choosing) this.agent._heardSinceDecision = 0;
+                const used_command = await this.agent.handleMessage('system', msg, -1, { ephemeral: choosing });
                 if (!this._shouldContinue())
                     break;
 
-                if (!used_command && choosing) {
-                    await this._wait(this.village_interval);
+                if (choosing) {
+                    if (stalled) {
+                        this.agent._speechLoop = { last: [], stalled: false };
+                    } else {
+                        this.agent._speechLoop = noteSpeechTurn(this.agent._speechLoop, {
+                            text: this.agent._lastDecisionSpeech || '',
+                            acted: Boolean(used_command),
+                        });
+                    }
+                    const heard = () => (this.agent._heardSinceDecision || 0) > 0;
+                    if (!this.agent._speechLoop?.stalled) {
+                        await this._wait(used_command ? this.cooldown : this.village_interval, heard);
+                    }
                     continue;
                 }
 
@@ -183,10 +199,11 @@ export class SelfPrompter {
         return used_command;
     }
 
-    async _wait(delay) {
+    async _wait(delay, wake = null) {
         const interval = Math.min(delay, 500);
         let remaining = delay;
         while (remaining > 0 && this._shouldContinue()) {
+            if (typeof wake === 'function' && wake()) return;
             await new Promise(resolve => setTimeout(resolve, Math.min(interval, remaining)));
             remaining -= interval;
         }

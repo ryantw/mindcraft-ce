@@ -43,9 +43,21 @@ export function judgeRemainsSite(blockName, y) {
  * identity it carries. Cause, time, and coordinates are not written on it.
  * Calling this twice with the same existing plan returns that plan.
  */
+export const REMAINS_ATTEMPT_LIMIT = 3;
+
 export function planRemains({ position, dimension, name, site, existing = null } = {}) {
-    if (existing && (existing.status === 'planned' || existing.status === 'placed' || existing.status === 'unplaced')) {
+    if (existing && (existing.status === 'planned' || existing.status === 'placed' || existing.status === 'unplaced' || existing.status === 'pending')) {
         return { ...existing, idempotent: true };
+    }
+    if (!site?.block) {
+        return {
+            status: 'pending',
+            reason: 'not_attempted',
+            id: null,
+            kind: null,
+            attempts: 0,
+            idempotent: false,
+        };
     }
     const judged = judgeRemainsSite(site?.block, position?.y);
     if (!judged.place) {
@@ -136,8 +148,8 @@ export function armorStandCommand(name, x, y, z) {
     return `execute positioned ${x} ${y} ${z} unless entity @e[type=minecraft:armor_stand,tag=village_remains,distance=..2,limit=1] run summon minecraft:armor_stand ${x} ${y} ${z} {CustomName:'{"text":"${name}"}',CustomNameVisible:1b,Marker:1b,NoGravity:1b,PersistenceRequired:1b,Tags:["village_remains"],DisabledSlots:4144959}`;
 }
 
-export function dockerRcon(container, command) {
-    assertRemainsTarget({ container, dataDir: '/tmp/village-m3-unprotected' });
+export function dockerRcon(container, command, { allowVillageAlpha = false } = {}) {
+    assertRemainsTarget({ container, dataDir: '/tmp/village-m3-unprotected', allowVillageAlpha });
     const result = spawnSync('docker', ['exec', container, 'rcon-cli', command], {
         encoding: 'utf8',
         timeout: 20000,
@@ -147,56 +159,141 @@ export function dockerRcon(container, command) {
     return (result.stdout || '').trim();
 }
 
+function sleepSync(ms) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/** A loaded chunk answers the probe, whether or not the block matches. */
+export function chunkProbeLoaded(report) {
+    return interpretBlockProbe(report, 'stone').loaded;
+}
+
+const COLUMN_OFFSETS = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]];
+
+function columnPoints(position) {
+    const x = Math.floor(position.x);
+    const y = Math.floor(position.y);
+    const z = Math.floor(position.z);
+    return { x, y, z, points: COLUMN_OFFSETS.map(([dx, dz]) => [x + dx, z + dz]) };
+}
+
+function holdColumns(exec, position, fn) {
+    const { points } = columnPoints(position);
+    for (const [px, pz] of points) exec(`forceload add ${px} ${pz}`);
+    try {
+        return fn();
+    } finally {
+        for (const [px, pz] of points) {
+            try { exec(`forceload remove ${px} ${pz}`); } catch { /* the probe result still stands */ }
+        }
+    }
+}
+
 /**
- * Called by the dying process after life.json is already dead.
- * A second call does not summon another stand.
+ * The death column must answer before a block name is trusted. Neighbor columns
+ * are already forceloaded by the caller. Safe-site rules are unchanged.
  */
-export function placeConfiguredRemains(settings, { run } = {}) {
+export function selectRemainsColumn(exec, position, sleep = sleepSync) {
+    const { x, y, z } = columnPoints(position);
+    let ready = false;
+    for (let probe = 0; probe < 8; probe++) {
+        const report = exec(`execute if block ${x} ${y} ${z} minecraft:stone`);
+        if (chunkProbeLoaded(report)) {
+            ready = true;
+            break;
+        }
+        sleep(250);
+    }
+    let choice = { place: false, reason: ready ? 'no open block' : 'unloaded' };
+    if (!ready) return choice;
+    for (const [dx, dz] of COLUMN_OFFSETS) {
+        const blocks = {};
+        for (const dy of [0, 1]) {
+            blocks[`${x + dx},${y + dy},${z + dz}`] = readLiveBlock(exec, x + dx, y + dy, z + dz);
+        }
+        choice = chooseEvidenceColumn({ x: x + dx, y, z: z + dz }, blocks);
+        if (choice.place || choice.reason === 'void' || choice.reason === 'lava') break;
+    }
+    return choice;
+}
+
+function rememberEvidence(dataRoot, life, evidence) {
+    const next = {
+        ...life,
+        lifecycle: 'dead',
+        death: { ...life.death, evidence },
+    };
+    writeLife(dataRoot, next);
+    return evidence;
+}
+
+/**
+ * Called by the dying process after life.json is already dead, and again by
+ * recovery. A placed marker is not summoned twice. Lifecycle, time, position,
+ * and cause are left as they were.
+ */
+export function placeConfiguredRemains(settings, { run, sleep = sleepSync, attempts = REMAINS_ATTEMPT_LIMIT } = {}) {
     const container = settings?.village_remains_container;
-    if (!container || !settings.agent_data_root) return null;
+    if (!settings?.agent_data_root) return null;
     const life = readLife(settings.agent_data_root);
     const position = life?.death?.position;
     const name = settings.profile?.name;
     if (!life || life.lifecycle !== 'dead' || !position || !name) return null;
     if (life.death?.evidence?.status === 'placed') return life.death.evidence;
-    const exec = run || ((command) => dockerRcon(container, command));
-    const x = Math.floor(position.x);
-    const y = Math.floor(position.y);
-    const z = Math.floor(position.z);
-    // forceload takes block coordinates on this Paper version. Hold the chunk
-    // only while the stand is summoned, then release it.
-    exec(`forceload add ${x} ${z}`);
-    let evidence;
-    try {
-        const offsets = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]];
-        let choice = { place: false, reason: 'unloaded' };
-        for (const [dx, dz] of offsets) {
-            const blocks = {};
-            for (const dy of [0, 1]) {
-                blocks[`${x + dx},${y + dy},${z + dz}`] = readLiveBlock(exec, x + dx, y + dy, z + dz);
+    const prior = Number(life.death?.evidence?.attempts) || 0;
+    if (prior >= attempts) return life.death.evidence;
+    const stamp = () => new Date().toISOString();
+    if (!container) {
+        return rememberEvidence(settings.agent_data_root, life, {
+            status: 'unplaced',
+            reason: 'not_configured',
+            id: null,
+            kind: null,
+            attempts: prior + 1,
+            last_attempt_at: stamp(),
+        });
+    }
+    const allowVillageAlpha = container === 'village-alpha' && settings.village_scenario_id === 'village-alpha';
+    const exec = run || ((command) => dockerRcon(container, command, { allowVillageAlpha }));
+    // forceload takes block coordinates on this Paper version. Hold every
+    // candidate column through the summon, then release it.
+    return holdColumns(exec, position, () => {
+        const choice = selectRemainsColumn(exec, position, sleep);
+        const evidence = choice.place
+            ? {
+                status: 'placed',
+                reason: null,
+                id: `remains-${choice.x}-${choice.y}-${choice.z}`,
+                kind: 'named_armor_stand',
+                tag: 'village_remains',
+                name,
+                position: { x: choice.x, y: choice.y, z: choice.z },
+                attempts: prior + 1,
+                last_attempt_at: stamp(),
+                server_reply: String(exec(armorStandCommand(name, choice.x, choice.y, choice.z))).slice(0, 200),
             }
-            choice = chooseEvidenceColumn({ x: x + dx, y, z: z + dz }, blocks);
-            if (choice.place || choice.reason === 'void' || choice.reason === 'lava') break;
-        }
-        evidence = choice.place
-        ? {
-            status: 'placed',
-            reason: null,
-            id: `remains-${choice.x}-${choice.y}-${choice.z}`,
-            kind: 'named_armor_stand',
-            tag: 'village_remains',
-            name,
-            position: { x: choice.x, y: choice.y, z: choice.z },
-            server_reply: String(exec(armorStandCommand(name, choice.x, choice.y, choice.z))).slice(0, 200),
-        }
-        : { status: 'unplaced', reason: choice.reason, id: null, kind: null };
-        life.death = { ...life.death, evidence };
-        writeLife(settings.agent_data_root, life);
+            : {
+                status: 'unplaced',
+                reason: choice.reason,
+                id: null,
+                kind: null,
+                attempts: prior + 1,
+                last_attempt_at: stamp(),
+            };
+        rememberEvidence(settings.agent_data_root, life, evidence);
         if (evidence.status === 'placed') exec('save-all');
         return evidence;
-    } finally {
-        try { exec(`forceload remove ${x} ${z}`); } catch { /* placement already recorded */ }
-    }
+    });
+}
+
+/** Read the column that recovery would use. Does not summon and does not write life.json. */
+export function inspectRemainsSite(settings, { run, sleep = sleepSync } = {}) {
+    const container = settings?.village_remains_container;
+    const position = settings?.position;
+    if (!container || !position) return null;
+    const allowVillageAlpha = container === 'village-alpha' && settings.village_scenario_id === 'village-alpha';
+    const exec = run || ((command) => dockerRcon(container, command, { allowVillageAlpha }));
+    return holdColumns(exec, position, () => selectRemainsColumn(exec, position, sleep));
 }
 
 /**

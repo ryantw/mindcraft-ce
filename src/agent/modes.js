@@ -5,6 +5,7 @@ import settings from './settings.js'
 import convoManager from './conversation.js';
 import { noteStuckRecovery } from './reflection_triggers.js';
 import { systemObservation } from './system_events.js';
+import { combatWaitsForLand, readWaterState, rememberWater, shouldEscapeWater } from '../village/water.js';
 
 async function say(agent, message) {
     agent.bot.modes.behavior_log += message + '\n';
@@ -24,6 +25,57 @@ async function say(agent, message) {
 // while update functions are async, they should *not* be awaited longer than ~100ms as it will block the update loop
 // to perform longer actions, use the execute function which won't block the update loop
 const modes_list = [
+    {
+        name: 'water_escape',
+        description: 'Leave accidental water for a reachable bank. Interrupts travel, talk, and combat. Does not run for an explicit aquatic activity.',
+        interrupts: ['all'],
+        on: false,
+        active: false,
+        update: async function (agent) {
+            if (settings.village_autonomy !== true) return;
+            const bot = agent.bot;
+            const memory = bot._waterEscape || (bot._waterEscape = {
+                rejected: new Set(),
+                wasWet: false,
+                notedEntry: false,
+                cooling: 0,
+            });
+            const state = readWaterState(bot);
+            if (!shouldEscapeWater(state)) {
+                if (memory.wasWet) {
+                    memory.wasWet = false;
+                    memory.notedEntry = false;
+                    memory.rejected = new Set();
+                    memory.cooling = 0;
+                    bot.setControlState?.('jump', false);
+                    bot.pathfinder?.stop?.();
+                    agent.actions?.cancelResume?.();
+                    rememberWater(settings.agent_data_root, 'exit', bot.entity?.position);
+                }
+                return;
+            }
+            if (state.submerged) bot.setControlState?.('jump', true);
+            bot.modes.pause('self_defense');
+            bot.modes.pause('cowardice');
+            bot.modes.pause('hunting');
+            agent.actions?.cancelResume?.();
+            if (!memory.wasWet) {
+                memory.wasWet = true;
+                memory.rejected = new Set();
+            }
+            if (!memory.notedEntry) {
+                memory.notedEntry = true;
+                rememberWater(settings.agent_data_root, 'entry', bot.entity?.position);
+                say(agent, 'I fell into the water.');
+            }
+            if (memory.cooling && Date.now() < memory.cooling) return;
+            bot.pvp?.stop?.();
+            execute(this, agent, async () => {
+                const result = await skills.escapeWater(bot, memory);
+                if (!result.escaped) memory.cooling = Date.now() + 3000;
+            });
+        }
+    },
     {
         name: 'self_preservation',
         description: 'Respond to drowning, burning, and damage at low health. Interrupts all actions.',
@@ -78,14 +130,26 @@ const modes_list = [
                     });
                 }
             }
-            else if (Date.now() - bot.lastDamageTime < 3000 && (bot.health < 5 || bot.lastDamageTaken >= bot.health)) {
-                say(agent, 'I\'m dying!');
+            else if (world.getNearestEntityWhere(bot, entity => mc.isHostile(entity) && !mc.isCombatTarget(entity), 16)) {
+                const threat = world.getNearestEntityWhere(bot, entity => mc.isHostile(entity) && !mc.isCombatTarget(entity), 16);
+                say(agent, `I need to get away from the ${threat.name.replaceAll('_', ' ')}!`);
                 execute(this, agent, async () => {
-                    await skills.moveAway(bot, 20);
+                    await skills.avoidEnemies(bot, 24);
+                });
+            }
+            else if (Date.now() - bot.lastDamageTime < 5000 && bot.health <= 10) {
+                say(agent, bot.health <= 6 ? 'I\'m dying!' : 'I need to get away!');
+                execute(this, agent, async () => {
+                    await skills.avoidEnemies(bot, 24);
                 });
             }
             else if (agent.isIdle()) {
                 bot.clearControlStates(); // clear jump if not in danger or doing anything else
+                const now = Date.now();
+                if (!this._nextArmor || now >= this._nextArmor) {
+                    this._nextArmor = now + 30000;
+                    bot.armorManager?.equipAll?.()?.catch(() => {});
+                }
             }
         }
     },
@@ -157,13 +221,15 @@ const modes_list = [
     },
     {
         name: 'cowardice',
-        description: 'Run away from enemies. Interrupts all actions.',
+        description: 'Run away from creepers, provoked neutral creatures, and any fight while health is low. Interrupts all actions.',
         interrupts: ['all'],
         on: true,
         active: false,
         update: async function (agent) {
             const enemy = world.getNearestEntityWhere(agent.bot, entity => mc.isHostile(entity), 16);
-            if (enemy && await world.isClearPath(agent.bot, enemy)) {
+            const health = agent.bot.health ?? 20;
+            const mustLeave = enemy && (!mc.isCombatTarget(enemy) || health <= 10 || enemy.name === 'creeper');
+            if (mustLeave && await world.isClearPath(agent.bot, enemy)) {
                 say(agent, `Aaa! A ${enemy.name.replace("_", " ")}!`);
                 execute(this, agent, async () => {
                     await skills.avoidEnemies(agent.bot, 24);
@@ -173,12 +239,14 @@ const modes_list = [
     },
     {
         name: 'self_defense',
-        description: 'Attack nearby enemies. Interrupts all actions.',
+        description: 'Attack nearby enemies. Interrupts all actions. Does not attack a calm neutral creature.',
         interrupts: ['all'],
         on: true,
         active: false,
         update: async function (agent) {
-            const enemy = world.getNearestEntityWhere(agent.bot, entity => mc.isHostile(entity), 8);
+            if ((agent.bot.health ?? 20) <= 10) return;
+            if (settings.village_autonomy === true && combatWaitsForLand(readWaterState(agent.bot))) return;
+            const enemy = world.getNearestEntityWhere(agent.bot, entity => mc.isCombatTarget(entity), 8);
             if (enemy && await world.isClearPath(agent.bot, enemy)) {
                 say(agent, `Fighting ${enemy.name}!`);
                 execute(this, agent, async () => {
@@ -321,9 +389,31 @@ const modes_list = [
     }
 ];
 
+const IMMEDIATE_MODES = new Set(['water_escape', 'self_preservation', 'cowardice', 'self_defense']);
+
+/** Water, fire, and combat start moving without waiting for the current model call. */
+export function modeStartsImmediately(modeName) {
+    return IMMEDIATE_MODES.has(modeName);
+}
+
+/**
+ * Returns true when the caller must wait for the current model call.
+ * Immediate modes only raise the interrupt flag.
+ */
+export function interruptNeedsWait(modeName, prompter) {
+    if (!prompter?.isActive?.()) return false;
+    if (modeStartsImmediately(modeName)) {
+        prompter.interrupt = true;
+        return false;
+    }
+    return true;
+}
+
 async function execute(mode, agent, func, timeout=-1) {
-    if (agent.self_prompter.isActive())
-        agent.self_prompter.stopLoop();
+    if (interruptNeedsWait(mode.name, agent.self_prompter)) {
+        // Ordinary modes let the current decision finish. Water and combat do not.
+        await agent.self_prompter.stopLoop();
+    }
     let interrupted_action = agent.actions.currentActionLabel;
     mode.active = true;
     let code_return = await agent.actions.runAction(`mode:${mode.name}`, async () => {
@@ -332,17 +422,23 @@ async function execute(mode, agent, func, timeout=-1) {
     mode.active = false;
     console.log(`Mode ${mode.name} finished executing, code_return: ${code_return.message}`);
 
+    if (mode.name === 'water_escape') agent.actions.cancelResume();
+    const stillInWater = mode.name === 'water_escape' && shouldEscapeWater(readWaterState(agent.bot));
     let should_reprompt = 
         interrupted_action && // it interrupted a previous action
         !agent.actions.resume_func && // there is no resume function
         !agent.self_prompter.isActive() && // self prompting is not on
-        !code_return.interrupted; // this mode action was not interrupted by something else
+        !code_return.interrupted && // this mode action was not interrupted by something else
+        !stillInWater;
 
     if (should_reprompt) {
         // auto prompt to respond to the interruption
         let logs = agent.bot.modes.flushBehaviorLog();
         if (mode.name === 'unstuck') {
-            agent.handleMessage('system', systemObservation('AUTOMATIC RECOVERY', `Your previous action '${interrupted_action}' made no progress. Do not repeat that command. Do not say that you are stuck or free. Choose a different action.`));
+            agent.handleMessage('system', systemObservation('AUTOMATIC RECOVERY', `Your previous action '${interrupted_action}' made no progress. Do not repeat that command. Do not say that you are stuck or free. Choose a different action.`), null, { inline: true });
+        }
+        else if (mode.name === 'water_escape') {
+            agent.handleMessage('system', systemObservation('SURVIVAL MODE INTERRUPTION', `You left the water. The interrupted action '${interrupted_action}' is not resumed. Do not repeat the route that entered the water. Choose a dry path.`), null, { inline: true });
         }
         else {
             // This is the agent's own event: keep it attributed to 'system'.
@@ -350,7 +446,7 @@ async function execute(mode, agent, func, timeout=-1) {
             // a message from that peer. A text-only reply still rejoins the
             // conversation through routeResponse's last_sender handling.
             agent.handleMessage('system', systemObservation('SURVIVAL MODE INTERRUPTION', `Your previous action '${interrupted_action}' was interrupted by ${mode.name}. This describes what happened; it is not a request to stop again.
-        Your behavior log: ${logs}\nChoose the next action in light of your existing objective and current safety.`));
+        Your behavior log: ${logs}\nChoose the next action in light of your existing objective and current safety.`), null, { inline: true });
         }
     }
 }
@@ -468,5 +564,11 @@ export function initModes(agent) {
     let modes_json = agent.prompter.getInitModes();
     if (modes_json) {
         agent.bot.modes.loadJson(modes_json);
+    }
+    // Survival profiles leave cowardice off and fight. Village inhabitants
+    // retreat from creepers and provoked neutrals, and from any fight at low health.
+    if (settings.village_autonomy === true) {
+        agent.bot.modes.setOn('cowardice', true);
+        agent.bot.modes.setOn('water_escape', true);
     }
 }

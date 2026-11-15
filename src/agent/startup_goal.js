@@ -17,6 +17,20 @@ export function villageDecisionMessage() {
     return 'You are choosing your own next moment. You have no assigned quest, profession, or lifelong ambition. A current intention, if you have one, is optional. You may visit or talk with someone nearby, look around, tend or decorate, make or share something, organize your things, rest, follow a personal interest, or abandon an intention. Speak with ordinary words. There is no !say or !talkTo command, and command syntax is not conversation. A conversation or another simple activity does not need a multistep plan. Staying still for a while is a complete choice. If you do act, use one !commandName.';
 }
 
+/** Facts the decision loop can see without waiting for the model to ask. */
+export function villageSafetyNote(bot) {
+    if (!bot) return '';
+    const parts = [];
+    const tod = Number(bot.time?.timeOfDay);
+    if (Number.isFinite(tod) && (tod >= 12000 || tod < 500)) {
+        parts.push('It is night. Darkness outdoors is dangerous. Your house and bed are shelter if you want them. You are not required to sleep.');
+    }
+    if (bot.health != null && bot.health <= 10) {
+        parts.push('Your health is low. Eat, retreat, or reach shelter before any other plan.');
+    }
+    return parts.join(' ');
+}
+
 /** Ordinary social and domestic choices are not construction plans. */
 export function activityNeedsPlan(activity) {
     const simple = new Set(['talk', 'visit', 'look', 'rest', 'tend', 'decorate', 'share', 'organize', 'explore']);

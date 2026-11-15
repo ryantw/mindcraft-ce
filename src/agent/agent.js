@@ -27,7 +27,10 @@ import { sanitizeIncomingPeerMessage, sanitizeOutgoingChat } from './chat_hygien
 import { loadVillagePlaces } from '../village/knowledge.js';
 import { buildDeathFacts, recordVerifiedDeath } from '../village/death.js';
 import { noteNearbyRemains, recordVillageAction, recordVillageSpeech } from '../village/experience.js';
-import { acceptInWorldSpeech, claimSpeech, DEFAULT_HEARING_BLOCKS, speakerDistance } from '../village/locality.js';
+import { waterBlockedOutcome } from '../village/water.js';
+import { acceptInWorldSpeech, claimSpeech, DEFAULT_HEARING_BLOCKS, isDelayedMirror, rememberInWorldSpeech, speakerDistance } from '../village/locality.js';
+import { noteVerifiedProgress } from '../village/intentions.js';
+import { createTurnQueue, observePeerSpeech } from '../village/turn_taking.js';
 import { attachVillageMind, cancelDreamsForDeath } from '../village/dream_service.js';
 import { villageSpokenWords } from './chat_hygiene.js';
 
@@ -203,6 +206,14 @@ export class Agent {
                 const distance = speakerDistance(this.bot, username);
                 if (!acceptInWorldSpeech({ village: true, distance, range })) return;
                 if (!claimSpeech(username, message)) return;
+                if (isDelayedMirror(username, message)) return;
+                rememberInWorldSpeech(username, message);
+                if (convoManager.isOtherAgent(username)) {
+                    // Heard, and kept. A reply is the next decision, not a second
+                    // generation that cancels the one already running.
+                    observePeerSpeech(this, username, message);
+                    return;
+                }
             }
             return respondFunc(username, message);
         };
@@ -364,7 +375,7 @@ export class Agent {
         convoManager.endAllConversations();
     }
 
-    async handleMessage(source, message, max_responses=null) {
+    async handleMessage(source, message, max_responses=null, options=null) {
         if (this._retirementStarted) return false;
         if (!this.ready) {
             this._deferredMessages = this._deferredMessages || [];
@@ -372,6 +383,32 @@ export class Agent {
             console.log(`[${this.name || 'agent'}] Deferred message from ${source} until initialization completes.`);
             return false;
         }
+        if (settings.village_autonomy === true && !options?.inline) {
+            // Ordinary turns wait. They do not start a second generation.
+            // An operator command still runs now, and an in-flight reply is
+            // dropped, because the player asked for that command.
+            const operatorCommand = source !== 'system'
+                && source !== this.name
+                && !convoManager.isOtherAgent(source)
+                && Boolean(containsCommand(message));
+            if (operatorCommand) {
+                if ((this._decisionDepth || 0) > 0 && this.prompter)
+                    this.prompter.most_recent_msg_time = Date.now();
+                return this.handleMessage(source, message, max_responses, { ...(options || {}), inline: true });
+            }
+            this._turnQueue ??= createTurnQueue();
+            return this._turnQueue.run(() => this.handleMessage(source, message, max_responses, { ...(options || {}), inline: true }));
+        }
+        const trackDecision = settings.village_autonomy === true;
+        if (trackDecision) this._decisionDepth = (this._decisionDepth || 0) + 1;
+        try {
+        return await this._handleVillageOrSurvivalMessage(source, message, max_responses, options);
+        } finally {
+            if (trackDecision) this._decisionDepth--;
+        }
+    }
+
+    async _handleVillageOrSurvivalMessage(source, message, max_responses=null, options=null) {
         await this.checkTaskDone();
         if (!source || !message) {
             console.warn('Received empty message from', source);
@@ -444,9 +481,13 @@ export class Agent {
             await this.history.add('system', behavior_log);
         }
 
-        // Handle other user messages
-        await this.history.add(source, message);
-        this.history.save();
+        // A village self-prompt is a schedule, not someone speaking. It is
+        // shown to the model once and is not kept as conversation.
+        const ephemeral = options?.ephemeral === true;
+        if (!ephemeral) {
+            await this.history.add(source, message);
+            this.history.save();
+        }
 
         // The self-prompt loop requests plans itself. While it is paused (for
         // example inside a long peer conversation) an agent with no usable plan
@@ -465,11 +506,13 @@ export class Agent {
         for (let i=0; i<max_responses; i++) {
             if (checkInterrupt()) break;
             let history = this.history.getHistory();
+            if (ephemeral) history = history.concat([{ role: 'system', content: message }]);
             let res = await this.prompter.promptConvo(history, { contextKind });
 
             console.log(`${this.name} full response to ${source}: ""${res}""`);
 
             if (res.trim().length === 0) {
+                this._lastDecisionSpeech = '';
                 console.warn('no response')
                 break; // empty response ends loop
             }
@@ -477,6 +520,7 @@ export class Agent {
             let command_name = containsCommand(res);
 
             if (command_name) { // contains query or command
+                this._lastDecisionSpeech = '';
                 res = truncCommandMessage(res); // everything after the command is ignored
                 this.history.add(this.name, res);
                 
@@ -571,6 +615,20 @@ export class Agent {
                 }
 
                 let execute_res = await executeCommand(this, res);
+                if (this.bot.waterTravelFailure && !this.actions.getLastOutcome?.()) {
+                    const failure = this.bot.waterTravelFailure;
+                    this.bot.waterTravelFailure = null;
+                    this.actions.recordOutcome(waterBlockedOutcome({
+                        action: attempt.action,
+                        params: attempt.params,
+                        x: failure.x,
+                        y: failure.y,
+                        z: failure.z,
+                        bot: this.bot,
+                    }));
+                } else if (this.bot.waterTravelFailure) {
+                    this.bot.waterTravelFailure = null;
+                }
 
                 console.log('Agent executed:', command_name, 'and got:', execute_res);
                 used_command = true;
@@ -665,6 +723,14 @@ export class Agent {
                         failed,
                         resultText: outcome,
                     });
+                    const sameAction = structuredOutcome?.action === command_name.replace(/^!/, '');
+                    const verifiedProgress = sameAction
+                        ? Boolean(structuredOutcome.relevantProgress)
+                        : !structuredOutcome && isAction(command_name);
+                    if (settings.village_autonomy === true && settings.agent_data_root && !failed && verifiedProgress && command_name !== '!intention') {
+                        const note = String(outcome || '').split('\n').map(line => line.trim()).filter(Boolean)[0] || '';
+                        noteVerifiedProgress(settings.agent_data_root, note);
+                    }
                 } catch (error) {
                     console.warn(`[${this.name}] Automatic reflection error: ${error.message}`);
                 }
@@ -685,6 +751,7 @@ export class Agent {
                     await this.history.add('system', 'Your last reply only repeated an action result. Results are private observations; do not restate them in chat. Say something in your own words or take an action.');
                     break;
                 }
+                this._lastDecisionSpeech = speech.text;
                 this.history.add(this.name, speech.text);
                 this.routeResponse(source, speech.text);
                 break;
@@ -872,6 +939,9 @@ export class Agent {
         }, INTERVAL);
 
         this.bot.emit('idle');
+        try {
+            this.bot.armorManager?.equipAll()?.catch(() => {});
+        } catch { /* armor plugin may be absent in a test bot */ }
         attachVillageMind(this);
     }
 
@@ -900,6 +970,9 @@ export class Agent {
     
 
     _noteVillageDeath(facts) {
+        // Set before any await. A death disconnect used to call cleanKill and
+        // exit during the 500ms wait, so the remains call never started.
+        this._disconnectHandled = true;
         let recorded = null;
         try {
             if (settings.agent_data_root) recorded = recordVerifiedDeath(settings.agent_data_root, facts);
