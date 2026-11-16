@@ -10,7 +10,7 @@ import Vec3 from 'vec3';
 import * as world from './library/world.js';
 import settings from './settings.js';
 import { agentDataDir } from './data_dir.js';
-import { checkProposalFeasibility, describeAvailableActions, describeConstruction } from './plan_feasibility.js';
+import { OBSERVATION_PLAN_COMMANDS, checkProposalFeasibility, describeAvailableActions, describeConstruction } from './plan_feasibility.js';
 import { analyzeConstruction, effectivePlanMaterials } from './plan_geometry.js';
 import { describeLedger, materialLedger, normalizeMaterials, redundantStepReason, rightsizeResourceStep, stepProduces } from './plan_resources.js';
 
@@ -62,6 +62,7 @@ const VERIFIED_BY_COMMAND = new Set([
     'searchForBlock', 'searchForEntity',
     'placeHere',
     'intention', 'ambition', 'stance',
+    ...OBSERVATION_PLAN_COMMANDS,
 ]);
 
 function normalizeEvidence(raw, action) {
@@ -237,7 +238,7 @@ export class PlanManager {
         if (!reason) return this.getCurrentPlan();
         if (this.planningPromise) return this.planningPromise;
         // After a failed or rejected planning attempt, wait before spending
-        // more model calls; the agent keeps acting autonomously meanwhile.
+        // more model calls. A village goal stays in place during that wait.
         if (Date.now() < this.nextPlanningAllowedAt) return this.getCurrentPlan();
         this.planningPromise = this._requestPlan(reason).finally(() => {
             this.planningPromise = null;
@@ -356,8 +357,11 @@ export class PlanManager {
             console.warn(`[${this.agent.name}] Plan proposal rejected as not executable (attempt ${attempt + 1}): ${problems.join(' | ')}`);
             feedback = problems;
         }
+        const villageGoal = settings.village_autonomy === true && settings.agent_data_root;
         this._planningFailed(rejections >= 2
-            ? 'Plan proposal rejected twice as not executable; continuing autonomously.'
+            ? (villageGoal
+                ? 'Plan proposal rejected twice as not executable. The current goal stays. Waiting before another plan instead of an unrelated task.'
+                : 'Plan proposal rejected twice as not executable; continuing autonomously.')
             : 'Planning request returned no usable plan.');
         return previous;
     }
@@ -387,6 +391,9 @@ export class PlanManager {
             lines.push('', 'YOUR PREVIOUS PROPOSAL WAS REJECTED because it could not be executed:');
             for (const problem of feedback.slice(0, 6)) lines.push(`- ${problem}`);
             lines.push('Propose a different plan that fixes these problems.');
+            if (settings.village_autonomy === true) {
+                lines.push('A shorter plan is valid and does not have to finish the goal. If you do not yet know which object to name, gather information first: travel only to a place already in the known state, then !nearbyBlocks() and !entities(). Do not invent a block, item, or entity name, and do not substitute a familiar block for an object you have not discovered.');
+            }
         }
         return lines.join('\n');
     }
@@ -618,6 +625,7 @@ export class PlanManager {
             reason: outcome.reason,
             relevantProgress: outcome.relevantProgress,
             observedAt: outcome.observedAt,
+            observation: cleanText(outcome.evidence?.observation, 800),
         };
         plan.updatedAt = now();
 
@@ -684,6 +692,8 @@ export class PlanManager {
                 if (step.prerequisites.length)
                     lines.push(`Prerequisites: ${step.prerequisites.join(', ')}`);
             }
+            if (step.status === 'completed' && step.lastOutcome?.observation)
+                lines.push(`Observed: ${step.lastOutcome.observation}`);
             if (step.status === 'blocked' && step.lastOutcome?.reason)
                 lines.push(`Blocked because: ${step.lastOutcome.reason.message}`);
         }

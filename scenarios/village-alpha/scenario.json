@@ -41,7 +41,10 @@
     "inhabitants/cass.json",
     "inhabitants/rufus.json",
     "inhabitants/nell.json",
-    "inhabitants/bram.json"
+    "inhabitants/bram.json",
+    "inhabitants/hazel.json",
+    "inhabitants/silas.json",
+    "inhabitants/wren.json"
   ],
   "village": "village.json",
   "settings": {

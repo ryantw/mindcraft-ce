@@ -112,6 +112,11 @@ function failedOutcome(input, params, fallback='action_failed', { relevantState=
         reason.message = 'The action was interrupted before completion.';
         reason.condition = 'state_changed';
     }
+    if (!relevantState && reason.code === 'missing_workstation') {
+        relevantState = {
+            workstation: /furnace/i.test(String(input.feedback || '')) ? 'furnace' : 'crafting_table',
+        };
+    }
     return createActionOutcome({
         action: input.action,
         params,

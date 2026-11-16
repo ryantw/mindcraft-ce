@@ -21,6 +21,21 @@ const META_COMMANDS = new Set([
 ]);
 
 /**
+ * Queries that may be plan steps. A goal that depends on an unseen object
+ * can travel and look first; the next plan uses what these commands report.
+ */
+export const OBSERVATION_PLAN_COMMANDS = new Set([
+    'nearbyBlocks', 'entities', 'inventory', 'savedPlaces',
+]);
+
+const OBSERVATION_SUMMARY = {
+    nearbyBlocks: 'list the blocks around you. Use this before naming a block you have not seen',
+    entities: 'list the beings around you. Use this before naming an entity you have not seen',
+    inventory: 'list what you are holding',
+    savedPlaces: 'list places you have already remembered',
+};
+
+/**
  * What each construction-capable command can really do. Capabilities are only
  * advertised when the command is registered and not blocked.
  *   single_block_here  - one block at the agent's own feet
@@ -113,6 +128,10 @@ export function describeAvailableActions(agent) {
             .join(', ');
         lines.push(`!${name}(${params})`);
     }
+    for (const name of OBSERVATION_PLAN_COMMANDS) {
+        if (!commandUsable(agent, name)) continue;
+        lines.push(`!${name}() — ${OBSERVATION_SUMMARY[name]}`);
+    }
     return lines;
 }
 
@@ -138,6 +157,7 @@ function paramProblems(commandName, command, params) {
     }
     for (const [key, definition] of Object.entries(spec)) {
         if (!(key in params)) {
+            if (definition.optional) continue;
             problems.push(`!${commandName} requires parameter "${key}".`);
             continue;
         }
@@ -153,10 +173,16 @@ function paramProblems(commandName, command, params) {
             const valid = definition.type === 'BlockName' ? mc.blocksByName[name]
                 : definition.type === 'ItemName' ? mc.itemsByName[name]
                     : (mc.itemsByName[name] || mc.blocksByName[name]);
-            if (!valid) problems.push(`!${commandName} parameter "${key}" ("${name}") is not a valid ${definition.type === 'BlockName' ? 'block' : definition.type === 'ItemName' ? 'item' : 'block or item'} name.`);
+            if (!valid) {
+                const kind = definition.type === 'BlockName' ? 'block' : definition.type === 'ItemName' ? 'item' : 'block or item';
+                problems.push(`!${commandName} parameter "${key}" ("${name}") is not a valid ${kind} name. Do not invent a placeholder name. If you have not seen it, observe with !nearbyBlocks() or !entities() instead of naming it.`);
+            }
         } else if (typeof value !== 'string') {
             problems.push(`!${commandName} parameter "${key}" must be a string.`);
         }
+    }
+    if (commandName === 'searchForEntity' && typeof params.type === 'string' && !mc.entitiesByName[params.type]) {
+        problems.push(`!searchForEntity parameter "type" ("${params.type}") is not a known entity. Do not invent a name. Observe with !entities() before naming one.`);
     }
     return problems;
 }
@@ -241,6 +267,12 @@ export function checkProposalFeasibility(agent, proposal) {
         }
         if (isBlocked(agent, name) || command.operatorOnly) {
             problems.push(`${label} uses !${name}, which is not available to you.`);
+            return;
+        }
+        if (OBSERVATION_PLAN_COMMANDS.has(name)) {
+            if (Object.keys(step.action?.params || {}).length) {
+                problems.push(`${label}: !${name}() takes no parameters.`);
+            }
             return;
         }
         if (META_COMMANDS.has(name) || !isAction(`!${name}`)) {

@@ -6,6 +6,7 @@ import {
     inventorySnapshot,
     observedStateFingerprint,
     positionAnchor,
+    workstationStillMissing,
     storageAcceptsItem,
     validationBehaviorKey,
 } from './action_outcome.js';
@@ -315,6 +316,9 @@ export class ActionManager {
             stillBlocked = items.length > 0
                 ? !items.some(item => storageAcceptsItem(bot, item))
                 : inventorySnapshot(bot).storage.free === 0;
+        } else if (block.condition === 'state_changed' && block.relevantState?.workstation) {
+            // A missing table or furnace is not repaired by gathering some other item.
+            stillBlocked = workstationStillMissing(this.agent.bot, block.relevantState.workstation);
         } else if (block.condition === 'state_changed') {
             // Actions that declare which state matters (collection) are not
             // unblocked by their own side effects such as stuck-recovery

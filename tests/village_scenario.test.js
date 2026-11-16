@@ -121,10 +121,10 @@ test('valid scenarios accept one, five, and fifteen inhabitants', () => {
     }
 });
 
-test('the sample village scenario is configuration for five new inhabitants and vacant houses', () => {
+test('the sample village scenario lists eight inhabitants and no vacant houses', () => {
     const bundle = loadScenario(path.join('scenarios', 'village-alpha'), { reservedNames: RESERVED, forLaunch: true });
-    assert.deepEqual(bundle.inhabitants.map(profile => profile.name), ['Ione', 'Cass', 'Rufus', 'Nell', 'Bram']);
-    assert.equal(bundle.village.plots.filter(plot => plot.occupant === null).length, 3);
+    assert.deepEqual(bundle.inhabitants.map(profile => profile.name), ['Ione', 'Cass', 'Rufus', 'Nell', 'Bram', 'Hazel', 'Silas', 'Wren']);
+    assert.equal(bundle.village.plots.filter(plot => plot.occupant === null).length, 0);
     assert.equal(bundle.scenario.connection.port, 25566);
     assert.equal(bundle.scenario.settings.allow_insecure_coding, false);
     assert.ok(bundle.village.plots.every(plot => plot.crafting_table && plot.furnace && plot.bed && plot.chest));

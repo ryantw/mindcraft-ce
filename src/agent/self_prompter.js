@@ -88,6 +88,10 @@ export class SelfPrompter {
                     await this._wait(5000);
                     continue;
                 }
+                if (direction?.planHold) {
+                    await this._wait(VILLAGE_DECISION_INTERVAL_MS);
+                    continue;
+                }
                 if (choosing) {
                     await this.agent.applyReadyDream?.();
                     await this.agent.orientVillage?.();

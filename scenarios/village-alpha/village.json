@@ -176,8 +176,8 @@
     },
     {
       "id": "plot-vacant",
-      "occupant": null,
-      "notes": "Vacant house. Assign a new inhabitant by setting occupant to their id.",
+      "occupant": "hazel",
+      "notes": "Upper-terrace cottage.",
       "home_marker": [
         -478,
         85,
@@ -211,8 +211,8 @@
     },
     {
       "id": "plot-vacant-2",
-      "occupant": null,
-      "notes": "Vacant house.",
+      "occupant": "silas",
+      "notes": "Southern cottage.",
       "home_marker": [
         -453,
         64,
@@ -246,8 +246,8 @@
     },
     {
       "id": "plot-vacant-3",
-      "occupant": null,
-      "notes": "Vacant house.",
+      "occupant": "wren",
+      "notes": "Southern cottage beside the other low house.",
       "home_marker": [
         -462,
         64,
@@ -387,7 +387,10 @@
         "fishing_rod",
         "shears",
         "flower_pot",
-        "book"
+        "book",
+        "poppy",
+        "iron_ingot",
+        "compass"
       ],
       "also": [
         "crafting_table",

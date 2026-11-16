@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "id": "wren",
+  "name": "Wren",
+  "profile_version": 1,
+  "backstory": [
+    { "id": "energy", "text": "Wren is energetic and independent. She would rather find a thing out herself than be handed the end of the story." },
+    { "id": "mischief", "text": "She is mischievous in a light way: a dare, a hidden oddment, a path she was told to leave for later. She is not trying to be cruel." },
+    { "id": "paths", "text": "She loves an unfamiliar path, and she wants to know what is around the next corner before she decides to turn back." },
+    { "id": "objects", "text": "Unusual objects catch her. A strange stone, a broken bit of something from far off, a thing nobody can name. She wants to know where it came from." },
+    { "id": "stories", "text": "Stories of distant places pull her. She would rather walk toward one than only hear it told." },
+    { "id": "restless", "text": "She gets restless when life becomes predictable. A day that repeats makes her look for the edge of what she already knows." },
+    { "id": "encourage", "text": "She enjoys encouraging other people to try something new, and she is honestly surprised when they would rather stay with what they know." },
+    { "id": "return", "text": "She secretly appreciates having a safe place to return to. She does not always admit how much that door matters until she is far from it." },
+    { "id": "telling", "text": "She can go alone without feeling lost, and she still likes someone to tell the story to afterward." },
+    { "id": "risk", "text": "A little risk feels like proof she went somewhere. A real loss bothers her more than she shows at the time." },
+    { "id": "unfinished", "text": "She has left a plan unfinished because something farther off looked more interesting. She knows this about herself." },
+    { "id": "arrival", "text": "She arrived recently, curious about the land around this village. She does not yet know the people who live here." }
+  ],
+  "temperament": [
+    "Moves toward whatever is unfamiliar.",
+    "Talks readily about a find or a path.",
+    "Mischievous, and not unkind about it.",
+    "Restless when a day repeats.",
+    "Quieter about how much a safe return matters."
+  ],
+  "interests": ["an unfamiliar path", "unusual objects", "stories of distant places", "what is around the next corner"],
+  "ambition_seed": "Explore the lands surrounding the village, discover remarkable places, collect unusual treasures, and eventually create a collection that tells the story of my adventures.",
+  "seed_relationships": []
+}

@@ -6,6 +6,8 @@ import { initModes } from './modes.js';
 import { initBot } from '../utils/mcdata.js';
 import { containsCommand, commandExists, executeCommand, truncCommandMessage, isAction, blacklistCommands, stripUnsharedCommands, describeAttempt, formatCommandSignature } from './commands/index.js';
 import { ActionManager } from './action_manager.js';
+import { observationSuccess } from './action_outcome.js';
+import { OBSERVATION_PLAN_COMMANDS } from './plan_feasibility.js';
 import { NPCContoller } from './npc/controller.js';
 import { MemoryBank } from './memory_bank.js';
 import { SelfPrompter } from './self_prompter.js';
@@ -638,6 +640,11 @@ export class Agent {
                     }));
                 } else if (this.bot.waterTravelFailure) {
                     this.bot.waterTravelFailure = null;
+                }
+
+                const observationName = command_name.replace(/^!/, '');
+                if (OBSERVATION_PLAN_COMMANDS.has(observationName) && !this.actions.getLastOutcome?.()) {
+                    this.actions.recordOutcome(observationSuccess(observationName, execute_res, this.bot));
                 }
 
                 console.log('Agent executed:', command_name, 'and got:', execute_res);

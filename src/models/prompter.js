@@ -22,10 +22,11 @@ import { activeAmbitionText, readAmbitions } from '../village/ambitions.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-function villagePlanningSystem({ name, goal, known, context }) {
+export function villagePlanningSystem({ name, goal, known, context }) {
     return [
         `You are ${name}. The current goal is already chosen: "${goal}".`,
-        'Plan the next few concrete steps that pursue that goal. Do not choose a different objective. Do not invent places, materials, people, or events that are not in the known state.',
+        'Plan the next few concrete steps that pursue that goal. A plan does not have to achieve the whole goal. Do not choose a different objective. Do not invent places, materials, people, or events that are not in the known state.',
+        'When the goal depends on a discovery you have not made, plan only the next information-gathering part. If the goal names a place in the known state and your position is somewhere else, the first step travels to that place\'s coordinates from the known state. The following step observes with nearbyBlocks and entities. Looking around where you already stand does not visit another place. After those steps succeed, a later plan can use what was observed. Do not name a block, item, or entity you have not seen. Do not substitute a familiar block for an object the goal has not identified. Placeholder names, invented entity names, and unknown item types are not executable.',
         'A flower is not a full solid block. placeBlockAt, buildLine, and buildPlane cannot place one. collectBlocks harvests the nearest blocks of a type into inventory. placeHere places one block you are holding at your feet, so walk to the spot first.',
         '',
         'KNOWN STATE',
@@ -34,9 +35,9 @@ function villagePlanningSystem({ name, goal, known, context }) {
         context,
         '',
         'Return ONLY one JSON object with this shape:',
-        '{"objective":"the current goal exactly","rationale":"why these steps pursue it","materials":[],"steps":[{"id":"short_stable_id","description":"one observable step","action":{"name":"collectBlocks","params":{"type":"oak_log","num":4}},"evidence":{"type":"inventory_min","item":"oak_log","count":4},"requires":[],"requiredResources":[],"prerequisites":[]}]}',
+        '{"objective":"the current goal exactly","rationale":"why these steps pursue it","materials":[],"steps":[{"id":"go","description":"one travel step","action":{"name":"goToCoordinates","params":{"x":0,"y":0,"z":0,"closeness":2}},"evidence":{"type":"position_near","position":{"x":0,"y":0,"z":0},"radius":2},"requires":[],"requiredResources":[],"prerequisites":[]},{"id":"look","description":"one observation step","action":{"name":"nearbyBlocks","params":{}},"evidence":{"type":"verified_action","action":"nearbyBlocks","params":{}},"requires":[],"requiredResources":[],"prerequisites":[]}]}',
         '',
-        'The example shows the required fields, not the goal. Use 2 to 6 ordered steps. Action names omit the leading !. Every step must use a command from AVAILABLE ACTION COMMANDS with its exact parameter names. Never plan a step that needs a command you do not have. Prefer commands with structured verification when applicable: collectBlocks, discard, craftRecipe, placeHere, placeBlockAt, buildLine, buildPlane, smeltItem. Allowed evidence types are: inventory_min, inventory_delta, block_at, block_nearby, position_near, and verified_action. For collectBlocks, inventory evidence must be the item that block drops, not an unrelated item. For placeHere, use verified_action for that same action and parameters. Do not use a claim, intention, chat message, or remembered quantity as completion evidence.',
+        'The example shows the required fields, not a destination. Do not copy its wording or coordinates. Use 1 to 6 ordered steps. One or two steps are enough when you still need to see the place. Travel with goToRememberedPlace(name) or goToCoordinates(x, y, z, closeness) only to a name or coordinates copied from the known state. Action names omit the leading !. Every step must use a command from AVAILABLE ACTION COMMANDS with its exact parameter names. Never plan a step that needs a command you do not have. nearbyBlocks, entities, inventory, and savedPlaces are valid steps when you need to look before acting; their evidence is verified_action with those same empty or listed parameters. Prefer commands with structured verification when applicable: collectBlocks, discard, craftRecipe, placeHere, placeBlockAt, buildLine, buildPlane, smeltItem. Allowed evidence types are: inventory_min, inventory_delta, block_at, block_nearby, position_near, and verified_action. For collectBlocks, inventory evidence must be the item that block drops, not an unrelated item. For placeHere, use verified_action for that same action and parameters. Do not use a claim, intention, chat message, or remembered quantity as completion evidence.',
     ].join('\n');
 }
 
@@ -449,6 +450,10 @@ export class Prompter {
                 known = 'Live game state is unavailable.';
             }
             const notes = renderVillageContext(settings.agent_data_root, { intention: villageGoal }).text;
+            const seen = (previous?.steps || [])
+                .map(step => step?.lastOutcome?.observation ? `- ${step.id}: ${step.lastOutcome.observation}` : '')
+                .filter(Boolean);
+            if (seen.length) known = `${known}\n\nOBSERVED DURING THE FINISHED PLAN\n${seen.join('\n')}`;
             prompt = villagePlanningSystem({
                 name: this.agent.name,
                 goal: villageGoal,
@@ -459,7 +464,7 @@ export class Prompter {
             prompt = await this.replaceStrings(prompt, []);
         }
         const planningRequest = villageGoal
-            ? `Your current goal is already chosen: "${villageGoal}". Your long-term ambition, for context only: "${villageAmbition || 'none recorded'}". Plan the next few concrete steps that pursue that goal. Do not invent places, materials, or events you have not seen. Set objective to the current goal exactly. Return only the JSON object.`
+            ? `Your current goal is already chosen: "${villageGoal}". Your long-term ambition, for context only: "${villageAmbition || 'none recorded'}". Plan the next few concrete steps that pursue that goal. The plan does not have to finish the goal. If the goal names a place and you are not already there, travel to that place's coordinates from the known state, then observe. Do not only look around where you already stand. Do not invent a block, item, or entity name. Set objective to the current goal exactly. Return only the JSON object.`
             : 'Choose your objective and plan now. Return only the JSON object.';
         try {
         if (typeof this.chat_model.complete === 'function') {

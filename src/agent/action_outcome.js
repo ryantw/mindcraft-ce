@@ -93,6 +93,39 @@ export function inventorySnapshot(bot) {
     };
 }
 
+/**
+ * A missing crafting table or furnace stays missing until that block is in
+ * hand or within crafting search range. Another item entering inventory does
+ * not change it.
+ */
+export function workstationStillMissing(bot, workstation) {
+    if (!workstation || !bot) return true;
+    try {
+        if ((world.getInventoryCounts(bot)[workstation] || 0) > 0) return false;
+    } catch {
+        // Inventory could not be read; keep the block until a later check.
+    }
+    try {
+        if (world.getNearestBlock(bot, workstation, 16)) return false;
+    } catch {
+        // The chunk search is unavailable. Held items were already checked.
+    }
+    return true;
+}
+
+export function observationSuccess(action, text, bot) {
+    const observation = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 800);
+    return createActionOutcome({
+        action,
+        params: {},
+        status: 'success',
+        relevantProgress: true,
+        retryableWithoutStateChange: true,
+        details: { observation },
+        bot,
+    });
+}
+
 export function inventoryChanges(before={}, after={}) {
     const changes = {};
     for (const name of new Set([...Object.keys(before), ...Object.keys(after)])) {

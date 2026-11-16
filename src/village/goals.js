@@ -197,6 +197,18 @@ export function syncPlanToGoal(planManager, goal) {
 
 const GOAL_DECISIONS = new Set(['achieved', 'follow_up', 'revise', 'abandon']);
 
+const INFORMATION_STEPS = new Set([
+    'goToCoordinates', 'goToRememberedPlace', 'goToPlayer', 'moveAway',
+    'nearbyBlocks', 'entities', 'inventory', 'savedPlaces',
+]);
+
+/** Travel and observation do not finish a goal that still depends on what was seen. */
+export function observationPlanCannotFinish(plan) {
+    const steps = (plan?.steps || []).filter(step => step?.status !== 'skipped');
+    if (!steps.length) return false;
+    return steps.every(step => INFORMATION_STEPS.has(step?.action?.name));
+}
+
 /**
  * A finished plan is not a new plan and not a finished ambition.
  * Replan only when the inhabitant asked to continue or changed the goal.
@@ -220,6 +232,7 @@ export function completedPlanLines(plan) {
         const params = JSON.stringify(step?.action?.params || {});
         const status = step?.lastOutcome?.status || step?.status || 'unknown';
         lines.push(`- ${step?.id || 'step'}: ${clip(step?.description, 160)} Command ${action} ${params}. Verified status: ${status}.`);
+        if (step?.lastOutcome?.observation) lines.push(`  Observed: ${clip(step.lastOutcome.observation, 400)}`);
     }
     return lines.join('\n');
 }
@@ -229,6 +242,7 @@ export function goalEvaluationPrompt({ name = 'yourself', ambition = '', goal = 
         `You are ${name}. A plan has finished. This is a private decision, not speech and not a command.`,
         'A finished plan does not by itself finish the current goal, and it does not finish the long-term ambition.',
         'Use only the verified outcomes below. Do not invent places, materials, people, or events.',
+        'A plan that only travels and looks does not finish a goal of exploring, discovering, or collecting. Choose follow_up. Do not say an object was collected unless a step verified that item.',
         ambition ? `Long-term ambition, still in force: ${clip(ambition, 240)}` : 'No long-term ambition is recorded.',
         `Current goal: ${clip(goal, 180)}`,
         completedPlanLines(plan),
@@ -327,6 +341,10 @@ async function evaluateFinishedPlan(agent, dataRoot, goal) {
         console.warn(`[${agent.name}] Finished plan left the goal unchanged because the evaluation was not usable.`);
         return true;
     }
+    if (parsed.decision === 'achieved' && observationPlanCannotFinish(plan)) {
+        console.log(`[${agent.name}] Travel and observation did not finish the goal. The same goal continues.`);
+        parsed = { ...parsed, decision: 'follow_up', goal: null };
+    }
     const applied = applyGoalDecision(dataRoot, parsed.decision, { goal: parsed.goal, note: parsed.note });
     if (!applied.applied) {
         plan.goalDecision = 'unresolved';
@@ -416,6 +434,12 @@ export async function prepareVillageTurn(agent) {
     }
     const step = agent.plan_manager?.getCurrentStep?.();
     const current = agent.plan_manager?.getCurrentPlan?.();
+    const planHold = Boolean(
+        goal &&
+        !step &&
+        agent.plan_manager?.enabled &&
+        Date.now() < (agent.plan_manager.nextPlanningAllowedAt || 0)
+    );
     return {
         paused: false,
         phase,
@@ -423,5 +447,6 @@ export async function prepareVillageTurn(agent) {
         goal,
         step: step?.description || '',
         planFinished: current?.status === 'completed' && !step,
+        planHold,
     };
 }

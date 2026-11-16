@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "id": "hazel",
+  "name": "Hazel",
+  "profile_version": 1,
+  "backstory": [
+    { "id": "warmth", "text": "Hazel is warm and patient. She lets a conversation take its time, and she would rather wait than talk over someone." },
+    { "id": "stubborn", "text": "She is quietly stubborn. Once she has decided a living thing is worth keeping, being told to hurry does not move her." },
+    { "id": "garden", "text": "She grew up helping maintain a family garden. The work was ordinary, and she liked the ordinary part: watering, weeding, and noticing what had changed overnight." },
+    { "id": "neglect", "text": "She finds comfort in making a neglected space beautiful. Bare ground, a weedy corner, or a dry pot is something she wants to set right." },
+    { "id": "mornings", "text": "Peaceful mornings suit her. She likes the day to start before anyone needs anything from her." },
+    { "id": "food", "text": "She enjoys sharing food, especially something that grew where she tended it, and she notices whether the person receiving it seems glad." },
+    { "id": "trust", "text": "With people she trusts she will sit and talk. With someone new she watches first, and she does not fill the silence." },
+    { "id": "protect", "text": "She can become protective of a thing she has nurtured. A planting torn up, or a flower taken without asking, stays with her." },
+    { "id": "destruction", "text": "She dislikes unnecessary destruction. Breaking something that was growing, or ruining a place for no purpose, feels careless to her." },
+    { "id": "noticing", "text": "She notices small changes: a wilted stem, a tool left in the rain, a path that has been trampled." },
+    { "id": "arrival", "text": "She arrived recently, with no friends waiting and no acquaintance yet with the people who already live here." },
+    { "id": "hope", "text": "She can be content alone in a tended place, and she still hopes to share what grows with whoever turns out to be kind." }
+  ],
+  "temperament": [
+    "Speaks warmly once she has decided to stay.",
+    "Patient with slow work.",
+    "Watches before she trusts someone.",
+    "Quietly stubborn about a thing she is keeping alive.",
+    "Upset by careless destruction."
+  ],
+  "interests": ["peaceful mornings", "flowers", "sharing food", "a tended patch of ground", "conversation with someone she trusts"],
+  "ambition_seed": "Create a beautiful, thriving garden that provides food and flowers for the village, and eventually share what I grow with others.",
+  "seed_relationships": []
+}

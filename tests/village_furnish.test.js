@@ -13,15 +13,14 @@ test('village furnishing follows the measured site and the supply manifest', () 
     const plan = planFurnish(bundle.village, site, bundle.inhabitants);
     assert.equal(plan.houses.length, bundle.village.plots.length);
     assert.deepEqual(plan.origin, [-458, 73, -715]);
-    assert.equal(plan.arrivals.length, 5);
+    assert.equal(plan.arrivals.length, 8);
     assert.deepEqual(plan.arrivals.map(arrival => arrival.name), bundle.inhabitants.map(profile => profile.name));
     const occupied = plan.chests.filter(chest => chest.occupied && chest.plot_id.startsWith('plot-'));
     const vacant = plan.chests.filter(chest => !chest.occupied);
-    assert.equal(occupied.length, 5);
-    assert.equal(vacant.length, 3);
+    assert.equal(occupied.length, 8);
+    assert.equal(vacant.length, 0);
     assert.ok(occupied.every(chest => chest.stacks.some(stack => stack.item === 'bread' && stack.count === 24)));
-    assert.ok(vacant.every(chest => chest.stacks.length === 0));
-    assert.deepEqual(occupied.map(chest => chest.stacks.at(-1).item), ['clock', 'fishing_rod', 'shears', 'flower_pot', 'book']);
+    assert.deepEqual(occupied.map(chest => chest.stacks.at(-1).item), ['clock', 'fishing_rod', 'shears', 'flower_pot', 'book', 'poppy', 'iron_ingot', 'compass']);
     const shared = plan.chests.find(chest => chest.plot_id === 'common-house');
     assert.equal(shared.stacks.find(stack => stack.item === 'wheat_seeds').count, 16);
     const source = ['src/village/furnish.js', 'src/village/placement.js', 'src/village/target.js', 'scripts/village/provision.js']
