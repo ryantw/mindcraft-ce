@@ -421,12 +421,14 @@ export function modeStartsImmediately(modeName) {
 
 /**
  * Returns true when the caller must wait for the current model call.
- * Immediate modes only raise the interrupt flag.
+ * Immediate modes raise the interrupt only while a decision loop is running.
+ * The loop clears that flag as it exits. Setting it with no loop leaves it
+ * set, and the idle restart then never starts another decision.
  */
 export function interruptNeedsWait(modeName, prompter) {
     if (!prompter?.isActive?.()) return false;
     if (modeStartsImmediately(modeName)) {
-        prompter.interrupt = true;
+        if (prompter.loop_active) prompter.interrupt = true;
         return false;
     }
     return true;

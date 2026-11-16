@@ -132,12 +132,16 @@ test('water escape interrupts an outstanding model call without waiting for it',
     let waited = false;
     const prompter = {
         isActive: () => true,
+        loop_active: true,
         interrupt: false,
         async stopLoop() { waited = true; },
     };
     assert.equal(interruptNeedsWait('water_escape', prompter), false);
     assert.equal(prompter.interrupt, true);
     assert.equal(waited, false);
+    const idleLoop = { isActive: () => true, loop_active: false, interrupt: false };
+    assert.equal(interruptNeedsWait('night_sleep', idleLoop), false);
+    assert.equal(idleLoop.interrupt, false);
     const ordinary = { isActive: () => true, interrupt: false };
     assert.equal(interruptNeedsWait('hunting', ordinary), true);
     assert.equal(ordinary.interrupt, false);

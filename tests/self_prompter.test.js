@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { setSettings } from '../src/agent/settings.js';
 import { SelfPrompter } from '../src/agent/self_prompter.js';
+import { interruptNeedsWait } from '../src/agent/modes.js';
+import { VILLAGE_AUTONOMY_PREAMBLE } from '../src/agent/startup_goal.js';
 
 function createFinn(handleMessage) {
     const turns = [];
@@ -120,4 +122,40 @@ test('a saved paused goal resumes after restart when no conversation remains', a
 
     assert.equal(prompts, 1);
     assert.equal(finn.self_prompter.prompt, goal);
+});
+
+test('a stopped night loop can decide again the next morning', async () => {
+    setSettings({ village_autonomy: true });
+    const decisions = [];
+    try {
+        const inhabitant = createFinn(async (agent, source, message) => {
+            decisions.push({ source, message });
+            agent.self_prompter.interrupt = true;
+            return true;
+        });
+        inhabitant.bot = { time: { timeOfDay: 8761 }, health: 20 };
+        const loop = inhabitant.self_prompter;
+        loop.prompt = VILLAGE_AUTONOMY_PREAMBLE;
+        loop.state = 1;
+        loop.loop_active = false;
+        loop.interrupt = true;
+        loop.cooldown = 0;
+        loop.idle_time = 0;
+        loop.update(1);
+        assert.equal(decisions.length, 0);
+
+        loop.interrupt = false;
+        assert.equal(interruptNeedsWait('night_sleep', loop), false);
+        assert.equal(loop.interrupt, false);
+        loop.idle_time = 0;
+        loop.update(1);
+        while (loop.loop_active) await new Promise(resolve => setTimeout(resolve, 2));
+
+        assert.equal(decisions.length, 1);
+        assert.equal(decisions[0].source, 'system');
+        assert.match(decisions[0].message, /During the day, pursue your ambition/);
+        assert.equal(loop.isActive(), true);
+    } finally {
+        setSettings({});
+    }
 });
