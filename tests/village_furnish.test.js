@@ -13,8 +13,9 @@ test('village furnishing follows the measured site and the supply manifest', () 
     const plan = planFurnish(bundle.village, site, bundle.inhabitants);
     assert.equal(plan.houses.length, bundle.village.plots.length);
     assert.deepEqual(plan.origin, [-458, 73, -715]);
-    assert.equal(plan.arrivals.length, 8);
-    assert.deepEqual(plan.arrivals.map(arrival => arrival.name), bundle.inhabitants.map(profile => profile.name));
+    const housed = ['Ione', 'Cass', 'Rufus', 'Nell', 'Bram', 'Hazel', 'Silas', 'Wren'];
+    assert.equal(plan.arrivals.length, housed.length);
+    assert.deepEqual(plan.arrivals.map(arrival => arrival.name), housed);
     const occupied = plan.chests.filter(chest => chest.occupied && chest.plot_id.startsWith('plot-'));
     const vacant = plan.chests.filter(chest => !chest.occupied);
     assert.equal(occupied.length, 8);

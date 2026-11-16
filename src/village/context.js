@@ -96,6 +96,8 @@ export function renderVillageContext(dataRoot, { intention = '', liveChest = und
         lines.push(`Your home stands at ${coord(home.home_marker)}. Bed ${coord(home.bed)}. Chest ${coord(home.chest)}. Entrance ${coord(home.door)}. Crafting table ${coord(home.crafting_table)}. Furnace ${coord(home.furnace)}.`);
         lines.push('The crafting table and furnace at home are already there. Do not gather materials to craft or place another unless you have seen that the one at home is gone.');
         lines.push(suppliesGuidance(knowledge, episodes.episodes, liveChest));
+    } else if (knowledge) {
+        lines.push('You have no private house. Sleep in a nearby bed. A place you save under the name bed is the bed you prefer next time. Chests and supplies you find are shared.');
     }
     const publicPlaces = (knowledge?.public_places || [])
         .slice(0, 6)

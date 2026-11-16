@@ -40,7 +40,9 @@ export function buildKnowledge(village, inhabitantId, { plotId = null } = {}) {
         home,
         public_places: publicPlaces,
         supplies_at_admission: supplies.map(stack => ({ item: stack.item, count: stack.count })),
-        supplies_note: SUPPLIES_NOTE,
+        supplies_note: plot
+            ? SUPPLIES_NOTE
+            : 'No private chest was assigned. What you are carrying was given once. Beds and chests you find are shared.',
     };
 }
 

@@ -13,6 +13,7 @@ import { ScenarioError } from '../src/village/errors.js';
 import { loadScenario } from '../src/village/load.js';
 import { prepareScenario } from '../src/village/launch.js';
 import { admitPopulation } from '../src/village/admit.js';
+import { renderVillageContext } from '../src/village/context.js';
 import { readLife, markDeadForTest, transitionLife } from '../src/village/life.js';
 import { beginProcess, recordProcessExit } from '../src/village/supervise.js';
 import { createAgent } from '../src/mindcraft/mindcraft.js';
@@ -121,9 +122,9 @@ test('valid scenarios accept one, five, and fifteen inhabitants', () => {
     }
 });
 
-test('the sample village scenario lists eight inhabitants and no vacant houses', () => {
+test('the sample village scenario lists the roster and no vacant houses', () => {
     const bundle = loadScenario(path.join('scenarios', 'village-alpha'), { reservedNames: RESERVED, forLaunch: true });
-    assert.deepEqual(bundle.inhabitants.map(profile => profile.name), ['Ione', 'Cass', 'Rufus', 'Nell', 'Bram', 'Hazel', 'Silas', 'Wren']);
+    assert.deepEqual(bundle.inhabitants.map(profile => profile.name), ['Ione', 'Cass', 'Rufus', 'Nell', 'Bram', 'Hazel', 'Silas', 'Wren', 'Otis', 'Mabel', 'Alden']);
     assert.equal(bundle.village.plots.filter(plot => plot.occupant === null).length, 0);
     assert.equal(bundle.scenario.connection.port, 25566);
     assert.equal(bundle.scenario.settings.allow_insecure_coding, false);
@@ -409,6 +410,33 @@ test('village autonomy does not inherit the survival settlement goal or stop wit
     assert.equal(resumed.mode, 'autonomous');
     assert.equal(resumed.goal, null);
     assert.equal(resumed.ignoredSavedGoal, 'Visit Nell tomorrow.');
+});
+
+test('an inhabitant with no plot is admitted without a private home', () => {
+    const people = [person('ada', 'Ada'), person('ben', 'Ben')];
+    const { parent, dir } = tempScenario('unhoused', people);
+    const runtimeRoot = path.join(parent, 'runtime');
+    try {
+        const village = JSON.parse(readFileSync(path.join(dir, 'village.json'), 'utf8'));
+        village.plots.find(plot => plot.occupant === 'ben').occupant = null;
+        writeFileSync(path.join(dir, 'village.json'), JSON.stringify(village, null, 2));
+        const bundle = loadTemp(dir, runtimeRoot);
+        const admitted = admitPopulation(bundle, { runtimeRoot, now: () => NOW });
+        assert.equal(admitted.records.find(record => record.id === 'ben').created, true);
+        const identity = JSON.parse(readFileSync(path.join(runtimeRoot, 'unhoused', 'ben', 'identity.json'), 'utf8'));
+        const knowledge = JSON.parse(readFileSync(path.join(runtimeRoot, 'unhoused', 'ben', 'knowledge.json'), 'utf8'));
+        const ada = JSON.parse(readFileSync(path.join(runtimeRoot, 'unhoused', 'ada', 'identity.json'), 'utf8'));
+        assert.equal(identity.home_plot_id, null);
+        assert.equal(knowledge.home, null);
+        assert.equal(knowledge.supplies_at_admission.length, 0);
+        assert.ok(knowledge.public_places.some(place => place.id === 'square'));
+        assert.equal(ada.home_plot_id, 'plot-ada');
+        const shown = renderVillageContext(path.join(runtimeRoot, 'unhoused', 'ben'));
+        assert.match(shown.text, /no private house/i);
+        assert.doesNotMatch(shown.text, /Your home stands/);
+    } finally {
+        rmSync(parent, { recursive: true, force: true });
+    }
 });
 
 test('village persistence files are written under the scenario runtime, not bots/', () => {

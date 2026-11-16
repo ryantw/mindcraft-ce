@@ -7,7 +7,7 @@ import { activeAmbitionText, ensureSeededAmbition, readAmbitions, reviseAmbition
 import { applyGoalDecision, chooseCurrentGoal, finishedPlanNeedsReplan, goalEvaluationPrompt, goalSelectionPrompt, syncPlanToGoal } from '../src/village/goals.js';
 import { decorativePlacementTarget, isGroundPlant } from '../src/agent/decorative_placement.js';
 import { readIntentions } from '../src/village/intentions.js';
-import { nextNightAction, nightPhase, autonomyPausedForNight } from '../src/village/night.js';
+import { nextNightAction, nightPhase, autonomyPausedForNight, bedNeedsAnother, nightHomeFrom } from '../src/village/night.js';
 import { villageDecisionMessage } from '../src/agent/startup_goal.js';
 import { commitDream } from '../src/village/dream_commit.js';
 
@@ -108,6 +108,24 @@ describe('personal ambition and night sleep', () => {
             now: 9000,
             nextSleepAt: 0,
         }).kind, 'sleep');
+        assert.equal(nextNightAction({
+            phase: 'dusk',
+            position: { x: 40, y: 64, z: 40 },
+            home: null,
+        }).kind, 'wait');
+        assert.equal(nextNightAction({
+            phase: 'night',
+            position: { x: 40, y: 64, z: 40 },
+            home: null,
+        }).kind, 'nearest_bed');
+        assert.equal(nextNightAction({
+            phase: 'night',
+            position: { x: 40, y: 64, z: 40 },
+            home: nightHomeFrom({ home: null }, { bed: [3, 64, 3] }),
+        }).kind, 'move');
+        assert.equal(bedNeedsAnother('the bed is occupied'), true);
+        assert.equal(bedNeedsAnother('there are monsters nearby'), false);
+        assert.deepEqual(nightHomeFrom({ home: { bed: [1, 64, 1] } }, { bed: [9, 64, 9] }).bed, [1, 64, 1]);
         const manager = {
             enabled: true,
             current: { status: 'active', objective: 'old goal' },

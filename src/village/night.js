@@ -1,5 +1,9 @@
+import { existsSync, readFileSync } from 'fs';
+import path from 'path';
 import settings from '../agent/settings.js';
 import { readKnowledge } from './knowledge.js';
+
+const ANOTHER_BED = /occupied|not a bed|half bed/i;
 
 export const DUSK_START = 12000;
 export const NIGHT_START = 13000;
@@ -69,12 +73,75 @@ export function nextNightAction({ phase, sleeping = false, emergency = false, po
     return { kind: 'nearest_bed' };
 }
 
+/** A home bed stays preferred. These failures mean that bed itself cannot be used. */
+export function bedNeedsAnother(message) {
+    return ANOTHER_BED.test(String(message || ''));
+}
+
+/**
+ * Assigned home wins. With no home, a place saved as `bed` is the preference.
+ * Anything else is left for a nearby bed.
+ */
+export function nightHomeFrom(knowledge, places = null) {
+    if (knowledge?.home) return knowledge.home;
+    const bed = places?.bed;
+    if (Array.isArray(bed) && bed.length >= 3 && bed.slice(0, 3).every(value => Number.isFinite(Number(value)))) {
+        return { bed: bed.slice(0, 3).map(Number) };
+    }
+    return null;
+}
+
 export function readNightHome(dataRoot = settings.agent_data_root) {
     try {
-        return readKnowledge(dataRoot)?.home || null;
+        const knowledge = readKnowledge(dataRoot);
+        let places = null;
+        if (!knowledge?.home && dataRoot) {
+            const file = path.join(dataRoot, 'places.json');
+            if (existsSync(file)) places = JSON.parse(readFileSync(file, 'utf8'));
+        }
+        return nightHomeFrom(knowledge, places);
     } catch {
         return null;
     }
+}
+
+function samePoint(loc, avoid) {
+    if (!avoid || !loc) return false;
+    return Number(loc.x) === Number(avoid.x)
+        && Number(loc.y) === Number(avoid.y)
+        && Number(loc.z) === Number(avoid.z);
+}
+
+async function sleepInReachableBed(bot, avoid, goToPosition) {
+    const beds = bot.findBlocks?.({
+        matching: block => String(block?.name || '').includes('bed'),
+        maxDistance: 32,
+        count: 8,
+    }) || [];
+    for (const loc of beds) {
+        if (samePoint(loc, avoid)) continue;
+        await goToPosition(bot, loc.x, loc.y, loc.z, 1);
+        const bed = bot.blockAt?.(loc);
+        if (!bed || !String(bed.name || '').includes('bed')) continue;
+        try {
+            await bot.sleep(bed);
+        } catch (error) {
+            if (bedNeedsAnother(error.message)) continue;
+            throw error;
+        }
+        bot.modes?.pause?.('unstuck');
+        while (bot.isSleeping) {
+            await new Promise(resolve => setTimeout(resolve, 500));
+        }
+        return true;
+    }
+    return false;
+}
+
+async function noteSleepWait(agent, memory, reason) {
+    memory.nextSleepAt = Date.now() + SLEEP_RETRY_MS;
+    memory.lastFailure = reason;
+    console.warn(`[${agent.name}] Sleep was not accepted (${reason}). Staying with the night routine.`);
 }
 
 async function closeDoorIfOpen(bot, door, bed) {
@@ -100,7 +167,7 @@ async function closeDoorIfOpen(bot, door, bed) {
  * A rejected sleep waits out a retry instead of asking the model again.
  */
 export async function performNightAction(agent, action) {
-    const { goToBed, goToPosition } = await import('../agent/library/skills.js');
+    const { goToPosition } = await import('../agent/library/skills.js');
     const bot = agent.bot;
     const memory = bot._nightSleep || (bot._nightSleep = { nextSleepAt: 0 });
     if (action.kind === 'move' && action.target) {
@@ -108,8 +175,12 @@ export async function performNightAction(agent, action) {
         return;
     }
     if (action.kind === 'nearest_bed') {
-        const slept = await goToBed(bot);
-        if (!slept) memory.nextSleepAt = Date.now() + SLEEP_RETRY_MS;
+        try {
+            const slept = await sleepInReachableBed(bot, null, goToPosition);
+            if (!slept) memory.nextSleepAt = Date.now() + SLEEP_RETRY_MS;
+        } catch (error) {
+            await noteSleepWait(agent, memory, error.message);
+        }
         return;
     }
     if (action.kind !== 'sleep') return;
@@ -123,8 +194,12 @@ export async function performNightAction(agent, action) {
     }
     if (!block || !String(block.name || '').includes('bed')) {
         console.warn(`[${agent.name}] The remembered bed is not usable (${block?.name || 'missing'}). Looking for another bed.`);
-        const slept = await goToBed(bot);
-        if (!slept) memory.nextSleepAt = Date.now() + SLEEP_RETRY_MS;
+        try {
+            const slept = await sleepInReachableBed(bot, action.target, goToPosition);
+            if (!slept) memory.nextSleepAt = Date.now() + SLEEP_RETRY_MS;
+        } catch (error) {
+            await noteSleepWait(agent, memory, error.message);
+        }
         return;
     }
     console.log(`[${agent.name}] Attempting to sleep.`);
@@ -135,9 +210,17 @@ export async function performNightAction(agent, action) {
             await new Promise(resolve => setTimeout(resolve, 500));
         }
     } catch (error) {
-        memory.nextSleepAt = Date.now() + SLEEP_RETRY_MS;
-        memory.lastFailure = error.message;
-        console.warn(`[${agent.name}] Sleep was not accepted (${error.message}). Staying with the night routine.`);
+        if (!bedNeedsAnother(error.message)) {
+            await noteSleepWait(agent, memory, error.message);
+            return;
+        }
+        console.warn(`[${agent.name}] The bed could not be used (${error.message}). Looking for another bed.`);
+        try {
+            const slept = await sleepInReachableBed(bot, action.target, goToPosition);
+            if (!slept) memory.nextSleepAt = Date.now() + SLEEP_RETRY_MS;
+        } catch (next) {
+            await noteSleepWait(agent, memory, next.message);
+        }
     }
 }
 

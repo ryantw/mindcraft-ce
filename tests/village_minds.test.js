@@ -610,7 +610,7 @@ test('the real village scenario accepts permanent death without being admitted h
         });
         assert.equal(bundle.scenario.settings.permanent_death, true);
         assert.equal(bundle.scenario.settings.hearing_blocks, 32);
-        assert.equal(bundle.inhabitants.length, 8);
+        assert.equal(bundle.inhabitants.length, 11);
     } finally {
         rmSync(runtimeRoot, { recursive: true, force: true });
     }

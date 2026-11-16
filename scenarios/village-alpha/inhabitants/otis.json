@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "id": "otis",
+  "name": "Otis",
+  "profile_version": 1,
+  "backstory": [
+    { "id": "easy", "text": "Otis is easygoing. A delay, a quiet stretch, or someone changing their mind does not put him out." },
+    { "id": "patient", "text": "He is patient. He would rather wait a thing out than force it, and he does not fill a silence just to have it gone." },
+    { "id": "hands", "text": "He is resourceful with what is already to hand. If a tool is missing he looks for another way before he asks someone to fetch one." },
+    { "id": "water", "text": "He likes fishing and being outdoors. A bank, a pond, or open weather suits him better than staying inside." },
+    { "id": "share", "text": "When a catch is good he wants to share it with people he likes. He notices whether they are glad of it." },
+    { "id": "enough", "text": "He wants to be able to feed himself. Taking more than he can use, or leaving someone else short, feels wasteful to him." },
+    { "id": "spots", "text": "He remembers a stretch of water by how it looked and whether anything rose there. He will go back to a place that worked." },
+    { "id": "pace", "text": "Being hurried irritates him less than being told the slow way was a mistake. He keeps his pace." },
+    { "id": "company", "text": "Company is welcome when it is easy. He does not need talk to stay, and he does not chase someone who wants to be left alone." },
+    { "id": "arrival", "text": "He arrived with no house of his own. The square is where he started, and a bed or a chest he finds is something the village shares." }
+  ],
+  "temperament": [
+    "Easygoing when plans slip.",
+    "Patient with waiting.",
+    "Resourceful with what is already there.",
+    "More at ease outdoors than indoors.",
+    "Glad to share a catch with someone he likes."
+  ],
+  "interests": ["fishing", "being outdoors", "a quiet stretch of water", "sharing food", "a spot worth returning to"],
+  "ambition_seed": "Find good fishing spots, become self-sufficient, and share his catches with people he likes.",
+  "seed_relationships": []
+}

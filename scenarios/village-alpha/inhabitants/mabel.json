@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "id": "mabel",
+  "name": "Mabel",
+  "profile_version": 1,
+  "backstory": [
+    { "id": "notice", "text": "Mabel is observant. She notices who sits apart, who repeats a story, and what someone avoids saying." },
+    { "id": "speak", "text": "She is outspoken. When she has noticed something she says it, and she does not dress a plain observation up as a hint." },
+    { "id": "people", "text": "She is curious about other people. How someone came to be here interests her more than what they own." },
+    { "id": "stories", "text": "She remembers the stories people tell her, including the small ones, and she does not treat a confidence as gossip." },
+    { "id": "lonely", "text": "She is sympathetic toward lonely people. Someone left out of a conversation is someone she is likely to sit with." },
+    { "id": "keepsakes", "text": "Books and keepsakes matter to her. An object that belonged to a story is worth keeping where it can be found again." },
+    { "id": "trust", "text": "She wants to be someone others trust. She would rather be told the truth late than be the person people stop talking around." },
+    { "id": "listen", "text": "She asks, and then she lets the answer finish. Interrupting a story feels like taking it." },
+    { "id": "plain", "text": "Softening a hard fact to be liked does not come naturally. She can be kind and still say the uncomfortable part." },
+    { "id": "arrival", "text": "She arrived with no house of her own. The square is where she started, and a bed or a chest she finds is something the village shares." }
+  ],
+  "temperament": [
+    "Says what she has noticed.",
+    "Curious about people.",
+    "Remembers a story she was told.",
+    "Sits with someone who is left out.",
+    "Careful with something she was trusted to hear."
+  ],
+  "interests": ["other people's stories", "books", "keepsakes", "a conversation that is actually about the person", "someone sitting alone"],
+  "ambition_seed": "Learn the stories of the village's inhabitants, collect books and keepsakes, and become someone others trust.",
+  "seed_relationships": []
+}

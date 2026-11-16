@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "id": "alden",
+  "name": "Alden",
+  "profile_version": 1,
+  "backstory": [
+    { "id": "guard", "text": "Alden is protective. Once he has decided a person or a place is his to look after, he puts that ahead of his own errand." },
+    { "id": "practical", "text": "He is pragmatic. He wants the thing that works tonight, not a finer plan that leaves someone standing in the dark." },
+    { "id": "own", "text": "He is independent. He would rather work a problem out himself than wait to be directed, and he dislikes being managed." },
+    { "id": "strangers", "text": "He is cautious around strangers. A new face gets a look and a short answer until he has seen how they behave." },
+    { "id": "ground", "text": "He pays attention to the ground around the village: which way is open, which way floods, which way a person could actually walk after dark." },
+    { "id": "routes", "text": "A path he has walked and found safe is worth remembering. He would rather use a known way than a shorter one he has not tried." },
+    { "id": "safer", "text": "Making the village safer matters to him. A dark corner, a broken step, or a route that strands someone is something he wants put right." },
+    { "id": "shield", "text": "He keeps a shield close. Standing between a threat and someone else is a thing he will do without announcing it." },
+    { "id": "trust", "text": "Trust, once given, is steady. He does not withdraw it over a small disagreement, and he does not give it to be polite." },
+    { "id": "arrival", "text": "He arrived with no house of his own. The square is where he started, and a bed or a chest he finds is something the village shares." }
+  ],
+  "temperament": [
+    "Protective of people he has decided to look after.",
+    "Pragmatic about what can be done now.",
+    "Independent, and irritated by being managed.",
+    "Cautious with someone he does not know.",
+    "Unwilling to call a route safe until he has walked it."
+  ],
+  "interests": ["the ground around the village", "a route he has already walked", "a practical fix", "keeping a shield close", "knowing where a person could get stuck"],
+  "ambition_seed": "Learn the surrounding terrain, discover safe routes between important places, and help make the village safer.",
+  "seed_relationships": []
+}

@@ -11,7 +11,7 @@ import {
     rotateLocal,
     routeWalkable,
 } from '../src/village/blueprint.js';
-import { datapackFiles, placementFunction } from '../src/village/placement.js';
+import { carriedStarter, datapackFiles, placementFunction, squareArrivalLines } from '../src/village/placement.js';
 import { assertProvisionTarget } from '../src/village/target.js';
 
 const PROVISIONS = {
@@ -101,6 +101,22 @@ test('the planner and placement function are not tied to the sample inhabitants'
     const files = datapackFiles([{ name: 'Ada', home_marker: [1, 65, 2], bed: [3, 65, 2] }]);
     assert.match(files['pack.mcmeta'], /"pack_format": 80/);
     assert.throws(() => placementFunction([{ name: 'A', home_marker: [0, 0, 0], bed: [0, 0, 0] }]), ScenarioError);
+});
+
+test('someone without a house is placed once at a square and given a carried kit', () => {
+    const lines = squareArrivalLines('Ada', [-460, 72, -715], carriedStarter('fishing_rod'));
+    const text = lines.join('\n');
+    assert.match(text, /tp @s -460 72 -715/);
+    assert.match(text, /spawnpoint @s -460 72 -715/);
+    assert.match(text, /give @s minecraft:bread 24/);
+    assert.match(text, /give @s minecraft:stone_pickaxe 1/);
+    assert.match(text, /give @s minecraft:leather_chestplate 1/);
+    assert.match(text, /give @s minecraft:fishing_rod 1/);
+    assert.ok(text.trim().endsWith('tag @s add village_placed'));
+    assert.equal(text.split('\n').filter(line => line.includes('tag=!village_placed')).length, lines.length);
+    assert.doesNotMatch(text, /item replace|minecraft:chest /);
+    assert.equal(carriedStarter('book').at(-1).item, 'book');
+    assert.equal(carriedStarter('shield').at(-1).item, 'shield');
 });
 
 test('provisioning refuses the survival port, container, world directory, and public binds', () => {

@@ -44,7 +44,10 @@
     "inhabitants/bram.json",
     "inhabitants/hazel.json",
     "inhabitants/silas.json",
-    "inhabitants/wren.json"
+    "inhabitants/wren.json",
+    "inhabitants/otis.json",
+    "inhabitants/mabel.json",
+    "inhabitants/alden.json"
   ],
   "village": "village.json",
   "settings": {

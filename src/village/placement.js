@@ -38,6 +38,49 @@ export function placementFunction(arrivals) {
     return `${lines.join('\n')}\n`;
 }
 
+const ITEM = /^[a-z0-9_]+$/;
+
+/**
+ * Food, stone tools, and leather armor carried on arrival, plus one personal item.
+ * Issued once, under the same first-login tag as a home placement.
+ */
+export function carriedStarter(personalItem) {
+    if (!ITEM.test(personalItem || '')) fail(`Personal item '${personalItem}' is not an item id.`);
+    const stacks = [
+        { item: 'bread', count: 24 },
+        { item: 'cooked_beef', count: 16 },
+        { item: 'apple', count: 8 },
+    ];
+    for (const item of ['stone_pickaxe', 'stone_axe', 'stone_shovel', 'stone_sword', 'leather_helmet', 'leather_chestplate', 'leather_leggings', 'leather_boots', personalItem]) {
+        stacks.push({ item, count: 1 });
+    }
+    return stacks;
+}
+
+/**
+ * First login for someone with no house: stand in the square, keep that as
+ * the respawn, receive the starter kit, then never do this again.
+ */
+export function squareArrivalLines(name, marker, items) {
+    if (!name || !NAME.test(name)) fail(`Placement name '${name}' is not a Minecraft username.`);
+    coord(marker, name);
+    if (!Array.isArray(items) || items.length < 1) fail(`${name} needs a starter kit.`);
+    const who = `@a[name=${name},tag=!village_placed]`;
+    const [x, y, z] = marker;
+    const lines = [
+        `execute as ${who} run tp @s ${x} ${y} ${z}`,
+        `execute as ${who} run spawnpoint @s ${x} ${y} ${z}`,
+    ];
+    for (const stack of items) {
+        if (!stack?.item || !ITEM.test(stack.item) || !Number.isInteger(stack.count) || stack.count < 1 || stack.count > 64) {
+            fail(`${name} has a bad starter stack.`);
+        }
+        lines.push(`execute as ${who} run give @s minecraft:${stack.item} ${stack.count}`);
+    }
+    lines.push(`execute as ${who} run tag @s add village_placed`);
+    return lines;
+}
+
 export function datapackFiles(arrivals) {
     return {
         'pack.mcmeta': `${JSON.stringify({
